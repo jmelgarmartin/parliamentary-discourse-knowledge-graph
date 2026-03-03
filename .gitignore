@@ -19,11 +19,14 @@ coverage.xml
 .env
 .env.*
 
-# Data folders (bronze/silver)
-data/bronze/
-data/silver/
+# Data folders
+data/
 *.db
 duckdb_state.db
+state/
+
+# Documentation
+docs/
 
 # IDE/editor
 .vscode/
@@ -34,3 +37,9 @@ duckdb_state.db
 Thumbs.db
 *.log
 standards.md
+
+# Execution outputs
+*out*.txt
+*ot.txt
+logs/
+

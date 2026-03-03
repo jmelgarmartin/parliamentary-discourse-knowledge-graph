@@ -17,6 +17,9 @@ duckdb = "^0.9.2"
 neo4j = "^5.14.1"
 pydantic = "^2.5.2"
 python-dotenv = "^1.0.0"
+beautifulsoup4 = "^4.14.3"
+numpy = "<2"
+webdriver-manager = "^4.0.2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.3"
@@ -26,18 +29,19 @@ ruff = "^0.1.6"
 mypy = "^1.7.0"
 types-requests = "^2.31.0.10"
 pre-commit = "^4.5.1"
+setuptools = "^82.0.0"
 
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.black]
-line-length = 88
+line-length = 120
 target-version = ['py311']
 include = '\.pyi?$'
 
 [tool.ruff]
-line-length = 88
+line-length = 120
 target-version = "py311"
 lint.select = ["E", "F", "W", "I"]
 

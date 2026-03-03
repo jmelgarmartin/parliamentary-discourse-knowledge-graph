@@ -38,7 +38,7 @@ The project follows a medallion architecture to ensure traceability, idempotency
 
 - Fully normalized and structured datasets in Parquet format
 - One table per entity (sessions, speakers, interventions, etc.)
-- Partitioned by legislature and date (e.g. `legislature=XV/date=YYYY-MM-DD/`)
+- Partitioned by legislature (e.g. `legislature=15/`)
 - Fully idempotent and regenerable from Bronze
 - Only the latest active version of each document is retained
 - No embeddings or aggregated analytical artifacts are stored at this layer
@@ -103,6 +103,14 @@ poetry run pytest
 poetry run black src tests
 poetry run ruff check src tests
 poetry run mypy src
+```
+
+## Execution
+
+Run the end-to-end pipeline for the current legislature:
+
+```bash
+poetry run python src/main.py
 ```
 
 ## Graph Layer (Neo4j)
