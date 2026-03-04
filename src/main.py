@@ -18,12 +18,15 @@ from congreso_analisis.ingestion.scrappers.deputies_scraper import DeputiesScrap
 from congreso_analisis.ingestion.scrappers.groups_scraper import GroupsScraper  # noqa: E402
 from congreso_analisis.ingestion.scrappers.sessions_scraper import SessionsScraper  # noqa: E402
 from congreso_analisis.ingestion.transformers.substitutions_enricher import SubstitutionsEnricher  # noqa: E402
+from congreso_analisis.silver.enrich_legislature import run_enrichment as run_interventions_enrichment  # noqa: E402
+from congreso_analisis.silver.interventions_extractor import InterventionsExtractor  # noqa: E402
 
 
 def setup_logging(process_name: str, log_level: str = "INFO") -> None:
     """Configures the root logger."""
     os.makedirs("logs", exist_ok=True)
-    for handler in logging.root.handlers[:]:
+    handlers = logging.root.handlers[:]
+    for handler in handlers:
         logging.root.removeHandler(handler)
 
     import datetime
@@ -95,7 +98,7 @@ def main() -> None:
     s_scraper = SessionsScraper(
         driver_path=args.driver_path, term=args.term, state_path=args.state_path, headless=args.headless
     )
-    s_scraper.run()
+    sessions_df, new_files = s_scraper.run()
     t1_sessions = time.time()
 
     sessions_path = pathlib.Path(f"data/bronze/sessions/legislature={args.term}/sessions.parquet")
@@ -175,6 +178,29 @@ def main() -> None:
 
     t1_enrich = time.time()
 
+    # 5. Extraction (Silver Layer)
+    logger.info(">>> phase 5: interventions_extractor (Silver Layer)")
+    t0_ext = time.time()
+    num_extracted = 0
+    if new_files:
+        logger.info(f"New files detected ({len(new_files)}). Starting incremental extraction...")
+        extractor = InterventionsExtractor(args.term)
+        df_ext = extractor.run(file_list=new_files)
+        num_extracted = len(df_ext)
+    else:
+        logger.info("No new session files detected. Skipping interventions extraction.")
+    t1_ext = time.time()
+
+    # 6. Interventions Enrichment (Silver Layer)
+    logger.info(">>> phase 6: interventions_enrichment (Silver Layer)")
+    t0_int_enrich = time.time()
+    if new_files:
+        logger.info("New data detected. Starting interventions enrichment...")
+        run_interventions_enrichment(args.term, None, None)
+    else:
+        logger.info("No new data to enrich. Skipping.")
+    t1_int_enrich = time.time()
+
     logger.info("=========================================")
     logger.info("EXECUTION METRICS SUMMARY")
     logger.info(f"Phase 1: Groups Scraper   -> Time: {t1_groups - t0_groups:.2f}s | Rows extracted: {num_groups}")
@@ -183,6 +209,8 @@ def main() -> None:
     logger.info(
         f"Phase 4: Data Enrichment  -> Time: {t1_enrich - t0_enrich:.2f}s | Relationships generated: {actual_rels}"
     )
+    logger.info(f"Phase 5: Interv. Extract -> Time: {t1_ext - t0_ext:.2f}s | Total rows: {num_extracted}")
+    logger.info(f"Phase 6: Interv. Enrich  -> Time: {t1_int_enrich - t0_int_enrich:.2f}s")
     logger.info("=========================================")
     logger.info("PIPELINE COMPLETED SUCCESSFULLY")
     logger.info("=========================================")

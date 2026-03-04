@@ -306,7 +306,10 @@ class SessionsScraper:
         # Only process Diarios de Sesiones Plenos if matching classic format
         is_plenary = "-PL-" in row_text or "Pleno" in row_text
 
-        if not is_plenary:
+        # CRITICAL: Only process Congress sessions (DSCD), skip Senate (DS_P, DSS, etc)
+        is_congress = "DSCD" in row_text or "Congreso" in row_text
+
+        if not is_plenary or not is_congress:
             return None
 
         # Extract publication code like: DSCD-15-PL-12
@@ -377,6 +380,7 @@ class SessionsScraper:
                 "publication_code": publication_code or document_id,
                 "is_plenary": is_plenary,
                 "session_date": session_date,
+                "is_new": False,
             }
 
         logger.info(f"Processing document {document_id} from {document_url}")
@@ -410,14 +414,15 @@ class SessionsScraper:
             "publication_code": publication_code or document_id,
             "is_plenary": is_plenary,
             "session_date": session_date,
+            "is_new": True,
         }
 
-    def run(self) -> pd.DataFrame:
+    def run(self) -> tuple[pd.DataFrame, List[pathlib.Path]]:
         """
         Executes the scraping process for parliamentary sessions, maintaining idempotent state
         with DuckDB and persisting output to Raw HTML and Bronze Parquet structures.
 
-        :return: Pandas DataFrame containing metadata of the processed documents.
+        :return: A tuple (all_metadata_df, list_of_new_file_paths).
         """
         self._init_db()
         self._init_driver()
@@ -486,6 +491,7 @@ class SessionsScraper:
 
         # Generate Parquet Metadata
         df = pd.DataFrame(metadata_records)
+        new_files = [pathlib.Path(r["raw_path"]) for r in metadata_records if r.get("is_new")]
 
         if not df.empty:
             out_dir = pathlib.Path(self.bronze_root) / self.dataset / f"legislature={self.term}"
@@ -494,7 +500,9 @@ class SessionsScraper:
 
             df.to_parquet(str(parquet_path), index=False)
             logger.info(f"Saved Metadata Parquet with {len(df)} rows to {parquet_path}")
+            if new_files:
+                logger.info(f"Detected {len(new_files)} new or updated session documents.")
         else:
             logger.warning("No records were successfully scraped to create the Parquet metadata.")
 
-        return df
+        return df, new_files
