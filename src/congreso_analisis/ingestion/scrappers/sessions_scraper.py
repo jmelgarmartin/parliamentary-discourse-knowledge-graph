@@ -13,6 +13,7 @@ import logging
 import os
 import pathlib
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 import duckdb
@@ -25,6 +26,7 @@ from congreso_analisis.utils.selenium_utils import (
     select_option_by_value,
 )
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select
 
@@ -120,11 +122,54 @@ class SessionsScraper:
         self.wait.until(EC.presence_of_element_located((By.ID, "_publicaciones_legislatura")))
 
         logger.info(f"Applying filters for legislature {self.term}...")
-        Select(self.driver.find_element(By.ID, "_publicaciones_legislatura")).select_by_value(self.term)
 
-        # 'D' roughly stands for Diarios de Sesiones
-        select_option_by_value(self.driver.find_element(By.ID, "publicacion"), "D")
-        select_option_by_value(self.driver.find_element(By.ID, "seccion"), "CONGRESO")
+        # Select the legislature
+        select_element = Select(self.driver.find_element(By.ID, "_publicaciones_legislatura"))
+        for option in select_element.options:
+            value = option.get_attribute("value")
+            if value.startswith(self.term):
+                option.click()
+                break
+        else:
+            # Fallback to direct select if startswith logic fails
+            Select(self.driver.find_element(By.ID, "_publicaciones_legislatura")).select_by_value(self.term)
+
+        # 'D' value corresponds to 'Diarios de Sesiones'. If the user wants to ensure exact text, we can use it.
+        try:
+            select_pub = Select(self.driver.find_element(By.ID, "publicacion"))
+            select_pub.select_by_visible_text("Diarios de Sesiones")
+        except Exception:
+            select_option_by_value(self.driver.find_element(By.ID, "publicacion"), "D")
+
+        # 'CONGRESO' for Sección. Visibility check for "Congreso de los Diputados".
+        try:
+            select_sec = Select(self.driver.find_element(By.ID, "seccion"))
+            select_sec.select_by_visible_text("Congreso de los Diputados")
+        except Exception:
+            select_option_by_value(self.driver.find_element(By.ID, "seccion"), "CONGRESO")
+
+        # Set Organo to 'Pleno-y-Diputación-Permanente'
+        try:
+            # It can be 'serieOrgano' or 'organo' depending on the version of the page
+            organo_elem = None
+            for eid in ["serieOrgano", "organo"]:
+                try:
+                    organo_elem = self.driver.find_element(By.ID, eid)
+                    break
+                except Exception:
+                    continue
+
+            if organo_elem:
+                target_value = "Pleno-y-Diputación-Permanente"
+                logger.info(f"Setting Organo filter to '{target_value}'...")
+
+                # Clear and type since it's an auto-complete
+                organo_elem.clear()
+                organo_elem.send_keys(target_value)
+                time.sleep(1)
+                organo_elem.send_keys(Keys.ENTER)
+        except Exception as e:
+            logger.warning(f"Could not set 'Pleno-y-Diputación-Permanente' filter: {e}")
 
         logger.info("Clicking the search button...")
         click_with_wait(
@@ -135,7 +180,12 @@ class SessionsScraper:
         )
 
         logger.info("Waiting for the results to load...")
-        self.wait.until(EC.presence_of_element_located((By.XPATH, "//tr[td//a[contains(text(),'Texto íntegro')]]")))
+        # Broaden the selector to be more robust
+        table_selector = (
+            "//tr[td//a[contains(@href, '/public_oficiales/') or "
+            "contains(@href, 'TextoIntegro') or contains(@href, 'id_texto=')]]"
+        )
+        self.wait.until(EC.presence_of_element_located((By.XPATH, table_selector)))
         logger.info("Results loaded")
 
     def _calculate_checksum(self, html_content: str) -> str:
@@ -245,37 +295,63 @@ class SessionsScraper:
 
         row_text = row.text
 
-        # Only process Diarios de Sesiones Plenos if matching classic format,
-        # though we try to be generic if the user wants other nested types.
-        is_plenary = "-PL-" in row_text
+        # Extract session date using regex search across all cells
+        session_date = ""
+        for cell in cells:
+            date_match = re.search(r"(\d{2}/\d{2}/\d{4})", cell.text)
+            if date_match:
+                session_date = date_match.group(1)
+                break
+
+        # Only process Diarios de Sesiones Plenos if matching classic format
+        is_plenary = "-PL-" in row_text or "Pleno" in row_text
 
         if not is_plenary:
             return None
 
         # Extract publication code like: DSCD-15-PL-12
-        document_code = ""
+        publication_code = ""
+        cve = ""
         for td in cells:
-            if "DSCD" in td.text:
-                document_code = td.text.strip()
-                break
+            cell_text = td.text.strip()
+            if "DSCD" in cell_text:
+                publication_code = cell_text
+            if "cve:" in cell_text or re.search(r"[A-Z]{2,4}-[A-Z0-9\-]+", cell_text):
+                cve = cell_text.replace("cve:", "").strip()
 
         # Derive stable document_id
-        if document_code:
-            match = re.search(r"(DSCD-\d+(?:-PL-\d+)?)", document_code)
-            document_id = match.group(1) if match else re.sub(r"[^A-Za-z0-9\-]", "_", document_code)
-        else:
-            # Fallback to URL hash if no clean code is found
+        document_id = ""
+        if publication_code:
+            match = re.search(r"(DSCD-\d+(?:-PL-\d+)?)", publication_code)
+            if match:
+                document_id = match.group(1)
+
+        if not document_id and cve:
+            document_id = cve
+
+        # Fallback to URL parameter or hash
+        if not document_id:
             try:
-                link = row.find_element(By.XPATH, ".//a[contains(text(),'Texto íntegro')]").get_attribute("href")
-                document_id = hashlib.sha1(link.encode("utf-8")).hexdigest()
+                # Try to find any link in the row
+                link_elem = row.find_element(By.TAG_NAME, "a")
+                href = link_elem.get_attribute("href") or ""
+                match_id = re.search(r"id_texto=([^&]+)", href)
+                if match_id:
+                    document_id = match_id.group(1)
+                else:
+                    document_id = hashlib.sha1(href.encode("utf-8")).hexdigest()
             except Exception:
-                return None  # Unprocessable if no ID and no link
+                return None
 
         try:
-            texto_link = row.find_element(By.XPATH, ".//a[contains(text(),'Texto íntegro')]")
+            # Try to find "Texto íntegro" or fallback to any link
+            try:
+                texto_link = row.find_element(By.XPATH, ".//a[contains(text(),'Texto íntegro')]")
+            except Exception:
+                texto_link = row.find_element(By.TAG_NAME, "a")
             document_url = texto_link.get_attribute("href") or ""
         except Exception:
-            return None  # No full text available
+            return None
 
         # 2. Check DuckDB state for idempotency
         state = self._get_document_state(document_id)
@@ -298,8 +374,9 @@ class SessionsScraper:
                 "extracted_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 "checksum": checksum,
                 "legislature": self.term,
-                "publication_code": document_code,
+                "publication_code": publication_code or document_id,
                 "is_plenary": is_plenary,
+                "session_date": session_date,
             }
 
         logger.info(f"Processing document {document_id} from {document_url}")
@@ -330,8 +407,9 @@ class SessionsScraper:
             "extracted_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "checksum": checksum,
             "legislature": self.term,
-            "publication_code": document_code,
+            "publication_code": publication_code or document_id,
             "is_plenary": is_plenary,
+            "session_date": session_date,
         }
 
     def run(self) -> pd.DataFrame:
@@ -351,7 +429,10 @@ class SessionsScraper:
 
             page = 1
             xpath_next = "//ul[@id='_publicaciones_paginationLinksPublicaciones']//a[text()='>']"
-            table_selector = "//tr[td//a[contains(text(),'Texto íntegro')]]"
+            table_selector = (
+                "//tr[td//a[contains(@href, '/public_oficiales/') or "
+                "contains(@href, 'TextoIntegro') or contains(@href, 'id_texto=')]]"
+            )
 
             while True:
                 logger.info(f"Processing Page {page}")
