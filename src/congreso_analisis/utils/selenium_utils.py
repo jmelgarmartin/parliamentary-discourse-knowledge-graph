@@ -132,7 +132,7 @@ def is_last_page(driver: webdriver.Chrome, element_id: str) -> bool:
     return False
 
 
-def click_next_page(
+def click_siguiente_pagina(
     driver: webdriver.Chrome,
     wait: WebDriverWait[webdriver.Chrome],
     next_xpath: str,

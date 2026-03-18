@@ -20,7 +20,7 @@ import duckdb
 import pandas as pd
 from congreso_analisis.utils.selenium_utils import (
     accept_cookies,
-    click_next_page,
+    click_siguiente_pagina,
     click_with_wait,
     init_driver,
     select_option_by_value,
@@ -265,8 +265,6 @@ class SessionsScraper:
         html_content = None
         try:
             # Added a slight delay for Akamai / anti-bot protection when opening new tabs directly
-            import time
-
             time.sleep(3)
             self.wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
             # Find the portlet block
@@ -475,7 +473,7 @@ class SessionsScraper:
                     pass
 
                 # Try clicking next page using utility
-                if not click_next_page(self.driver, self.wait, xpath_next, By.XPATH, table_selector):
+                if not click_siguiente_pagina(self.driver, self.wait, xpath_next, By.XPATH, table_selector):
                     logger.info("No next page link found.")
                     break
 

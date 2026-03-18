@@ -93,11 +93,11 @@ def test_paginate_table_no_progress() -> None:
     assert pages[0][0].text == "Fila idéntica constante"
 
 
-def test_click_next_page_no_button() -> None:
-    """Prueba que click_next_page devuelve False si no encuentra el botón."""
+def test_click_siguiente_pagina_no_button() -> None:
+    """Prueba que click_siguiente_pagina devuelve False si no encuentra el botón."""
     from unittest.mock import MagicMock
 
-    from congreso_analisis.utils.selenium_utils import click_next_page
+    from congreso_analisis.utils.selenium_utils import click_siguiente_pagina
 
     mock_driver = MagicMock()
     mock_wait = MagicMock()
@@ -107,17 +107,17 @@ def test_click_next_page_no_button() -> None:
 
     mock_driver.find_element.side_effect = NoSuchElementException()
 
-    result = click_next_page(
+    result = click_siguiente_pagina(
         driver=mock_driver, wait=mock_wait, next_xpath="//any_xpath", table_by="css selector", table_selector="tr"
     )
     assert result is False
 
 
-def test_click_next_page_disabled() -> None:
-    """Prueba que click_next_page devuelve False si el botón está deshabilitado."""
+def test_click_siguiente_pagina_disabled() -> None:
+    """Prueba que click_siguiente_pagina devuelve False si el botón está deshabilitado."""
     from unittest.mock import MagicMock
 
-    from congreso_analisis.utils.selenium_utils import click_next_page
+    from congreso_analisis.utils.selenium_utils import click_siguiente_pagina
 
     mock_driver = MagicMock()
     mock_wait = MagicMock()
@@ -129,17 +129,17 @@ def test_click_next_page_disabled() -> None:
     # We need to make sure find_element returns the button
     mock_driver.find_element.return_value = mock_btn
 
-    result = click_next_page(
+    result = click_siguiente_pagina(
         driver=mock_driver, wait=mock_wait, next_xpath="//any_xpath", table_by="css selector", table_selector="tr"
     )
     assert result is False
 
 
-def test_click_next_page_no_progress() -> None:
-    """Prueba que click_next_page devuelve False si la firma no cambia tras el click."""
+def test_click_siguiente_pagina_no_progress() -> None:
+    """Prueba que click_siguiente_pagina devuelve False si la firma no cambia tras el click."""
     from unittest.mock import MagicMock
 
-    from congreso_analisis.utils.selenium_utils import click_next_page
+    from congreso_analisis.utils.selenium_utils import click_siguiente_pagina
 
     mock_driver = MagicMock()
     mock_wait = MagicMock()
@@ -166,7 +166,7 @@ def test_click_next_page_no_progress() -> None:
 
     mock_wait.until.side_effect = TimeoutException()
 
-    result = click_next_page(
+    result = click_siguiente_pagina(
         driver=mock_driver,
         wait=mock_wait,
         next_xpath="//any_xpath",
@@ -177,11 +177,11 @@ def test_click_next_page_no_progress() -> None:
     assert result is False
 
 
-def test_click_next_page_success() -> None:
-    """Prueba que click_next_page devuelve True si avanza correctamente."""
+def test_click_siguiente_pagina_success() -> None:
+    """Prueba que click_siguiente_pagina devuelve True si avanza correctamente."""
     from unittest.mock import MagicMock
 
-    from congreso_analisis.utils.selenium_utils import click_next_page
+    from congreso_analisis.utils.selenium_utils import click_siguiente_pagina
 
     mock_driver = MagicMock()
     mock_wait = MagicMock()
@@ -201,7 +201,7 @@ def test_click_next_page_success() -> None:
     mock_driver.find_element.side_effect = find_element_side
     mock_wait.until.return_value = True  # Signature change wait succeeds
 
-    result = click_next_page(
+    result = click_siguiente_pagina(
         driver=mock_driver,
         wait=mock_wait,
         next_xpath="//any_xpath",

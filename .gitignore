@@ -26,7 +26,6 @@ duckdb_state.db
 state/
 
 # Documentation
-docs/
 
 # IDE/editor
 .vscode/
