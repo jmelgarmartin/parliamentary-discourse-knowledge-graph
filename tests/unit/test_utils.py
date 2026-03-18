@@ -32,6 +32,26 @@ def test_is_last_page_from_text() -> None:
     assert is_last_page_from_text(None) is False
 
 
+def test_parse_pagination_text() -> None:
+    """Prueba el ayudante privado de parseo de texto de paginación."""
+    from congreso_analisis.utils.selenium_utils import _parse_pagination_text
+
+    f, t, z = _parse_pagination_text("Resultados 1 a 20 de 100")
+    assert f == 1
+    assert t == 20
+    assert z == 100
+
+    f, t, z = _parse_pagination_text("Resultados 81 a 100 de 100")
+    assert f == 81
+    assert t == 100
+    assert z == 100
+
+    f, t, z = _parse_pagination_text("Algo distinto")
+    assert f is None
+    assert t is None
+    assert z is None
+
+
 def test_paginate_table_no_progress() -> None:
     """
     Prueba que paginate_table rompe el bucle si detecta que la página no avanza
