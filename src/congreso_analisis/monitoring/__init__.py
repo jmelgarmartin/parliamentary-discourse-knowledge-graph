@@ -1,3 +1,1 @@
-"""
-Módulo de Monitorización y Control de Errores.
-"""
+"""Monitoring and Error Control module."""

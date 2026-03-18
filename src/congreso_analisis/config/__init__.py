@@ -1,3 +1,1 @@
-"""
-Módulo de Configuración General.
-"""
+"""General Configuration module."""

@@ -1,3 +1,1 @@
-"""
-Punto de entrada principal del código fuente.
-"""
+"""Main entry point for the source code."""

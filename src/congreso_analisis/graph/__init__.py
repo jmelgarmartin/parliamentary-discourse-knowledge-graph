@@ -1,3 +1,1 @@
-"""
-Módulo de Grafos (Neo4j, Capa Gold).
-"""
+"""Graph module (Neo4j, Gold Layer)."""

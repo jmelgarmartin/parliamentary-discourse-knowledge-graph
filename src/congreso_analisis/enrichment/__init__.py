@@ -1,3 +1,1 @@
-"""
-Módulo de Enriquecimiento (LLM, Silver a Gold).
-"""
+"""Enrichment module (LLM, Silver to Gold)."""

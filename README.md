@@ -12,15 +12,16 @@ This project transforms unstructured parliamentary transcripts into structured, 
 
 Core capabilities include:
 
-- Speaker identification and intervention structuring
-- Discourse normalization and metadata extraction
-- Topic modeling and thematic clustering
-- Sentiment and discourse framing analysis
-- Linguistic and structural complexity measurement
-- Knowledge graph construction
-- Longitudinal political discourse analysis
+- **Speaker Resolution Engine**: Robust identification of MPs and Government members using a person-centric deduplication approach.
+- Discourse normalization and metadata extraction (aggressive removal of titles and treatments).
+- **Human-in-the-loop Validation**: Integrated review workflow for unresolved or ambiguous speakers.
+- Topic modeling and thematic clustering.
+- Sentiment and discourse framing analysis.
+- Linguistic and structural complexity measurement.
+- Knowledge graph construction.
+- Longitudinal political discourse analysis.
 
-The current MVP processes the latest legislature, with a scalable design intended to support full historical ingestion.
+The current implementation features a highly specialized Speaker Resolution layer that handles OCR errors, name variants (swaps, subsets), and separates personal identity from institutional roles.
 
 ## Data Architecture (Bronze / Silver / Gold)
 
@@ -134,6 +135,25 @@ The enrichment layer integrates external Language Model APIs to perform advanced
 - Discourse framing identification
 
 Model configuration is designed to support low-cost development usage and future production-grade deployment.
+
+## Speaker Resolution & Quality Control
+
+The project implements a sophisticated resolution engine to map textual labels (e.g., "El señor PRESIDENTE DEL GOBIERNO") to unique person identities.
+
+### Person-Centric Deduplication
+To ensure analytical integrity, the system enforces a **single canonical entry per person**. It uses an iterative consolidation process with the following rules:
+- **Name Swapping**: Correctly identifies that "PEREZ SANCHEZ" and "SANCHEZ PEREZ" are the same person.
+- **Subset Matching**: Unifies "GRANDE MARLASKA" and "GRANDE MARLASKA GOMEZ".
+- **Fuzzy/OCR Matching**: High-confidence fuzzy matching (85%+) catches OCR errors and joined words (e.g., "SANCHEZCASTEJON").
+
+### Manual Government Mapping (`data/reference/`)
+The system maintains a `government_manual_mapping.csv` for each legislature. This dictionary:
+- Separates **Personal Identity** (`canonical_person_key`) from **Institutional Roles** (`preferred_cargo`).
+- Normalizes all names by removing treatments (e.g., "El señor") and roles.
+- Tracks all textual variants as **Aliases** for traceability.
+
+### Review Reports (`speaker_review.txt`)
+After each enrichment run, a `speaker_review.txt` is generated in the Silver layer. It groups all intervention labels under their consolidated canonical identity, allowing humans to audit and refine the resolution with minimal effort.
 
 ## Roadmap
 

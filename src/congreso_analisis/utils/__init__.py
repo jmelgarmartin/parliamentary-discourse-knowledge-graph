@@ -1,3 +1,1 @@
-"""
-Utilidades compartidas (Logueo, Parsing básico, etc.).
-"""
+"""Shared utilities (Logging, basic parsing, etc.)."""

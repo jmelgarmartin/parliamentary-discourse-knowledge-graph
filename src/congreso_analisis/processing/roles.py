@@ -3,30 +3,31 @@ from enum import Enum
 
 
 class SpeakerRole(Enum):
-    MP = "MP"  # Diputado/a
-    GOV_MEMBER = "GOV_MEMBER"  # Miembro del Gobierno
-    CHAIR = "CHAIR"  # Presidencia / Mesa
+    MP = "MP"  # Member of Parliament (Diputado/a)
+    GOV_MEMBER = "GOV_MEMBER"  # Government Member (Miembro del Gobierno)
+    CHAIR = "CHAIR"  # Speaker / Presidency / Bureau (Presidencia / Mesa)
     UNKNOWN = "UNKNOWN"
 
 
 def normalize_person_name(label: str) -> str:
     """
-    Extrae el nombre de pila/apellidos de etiquetas complejas.
-    Ej: "La señora PRESIDENTA (Narbona Ruiz)" -> "Narbona Ruiz"
-    Ej: "El señor SÁNCHEZ PÉREZ-CASTEJÓN" -> "SÁNCHEZ PÉREZ-CASTEJÓN"
+    Extracts the first name/surnames from complex labels.
+    E.g.: "The Madam PRESIDENT (Narbona Ruiz)" -> "Narbona Ruiz"
+    E.g.: "Mr. SÁNCHEZ PÉREZ-CASTEJÓN" -> "SÁNCHEZ PÉREZ-CASTEJÓN"
     """
     clean = label.strip()
 
-    # 1. Caso con paréntesis: "ROL (Nombre Real)"
+    # 1. Case with parentheses: "ROLE (Real Name)"
     match_paren = re.search(r"\(([^)]+)\)", clean)
     if match_paren:
         return match_paren.group(1).strip()
 
-    # 2. Caso sin paréntesis, limpiar prefijos comunes
-    # Eliminar "El señor " / "La señora " / "Señor " / "Señora " (case insensitive)
+    # 2. Case without parentheses, clean common prefixes
+    # Remove "El señor " / "La señora " / "Señor " / "Señora " (case insensitive)
+    # Using Spanish treatment prefixes as they appear in the source text
     clean = re.sub(r"^(El|La|Los|Las)?\s*(señor(a|es|as)?)\s+", "", clean, flags=re.IGNORECASE)
 
-    # Eliminar puntuación final (:)
+    # Remove final punctuation (:)
     clean = clean.replace(":", "").strip()
 
     return clean
@@ -34,12 +35,12 @@ def normalize_person_name(label: str) -> str:
 
 def detect_role_by_regex(raw_text: str, label_norm: str = "") -> SpeakerRole:
     """
-    Intenta detectar el rol basado en el texto del speaker.
+    Attempts to detect the role based on the speaker text.
     """
     raw_upper = raw_text.upper()
     label_upper = (label_norm or raw_text).upper()
 
-    # 1. Detect Government (Presidente del Gobierno, Ministros...)
+    # 1. Detect Government (President of the Government, Ministers...)
     gov_keywords = [
         "PRESIDENTE DEL GOBIERNO",
         "MINISTRO",

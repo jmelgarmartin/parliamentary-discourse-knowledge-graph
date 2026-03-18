@@ -1,3 +1,1 @@
-"""
-Módulo de Almacenamiento (Bronze, Silver).
-"""
+"""Storage module (Bronze, Silver)."""

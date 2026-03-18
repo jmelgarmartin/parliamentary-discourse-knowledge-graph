@@ -1,3 +1,1 @@
-"""
-Módulo de Parsing (Bronze a Silver).
-"""
+"""Parsing module (Bronze to Silver)."""

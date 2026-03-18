@@ -1,3 +1,1 @@
-"""
-Módulo de Ingesta (Web a Bronze).
-"""
+"""Ingestion module (Web to Bronze)."""

@@ -1,3 +1,1 @@
-"""
-Módulo principal del proyecto Congreso.
-"""
+"""Main module for the Congreso project."""
