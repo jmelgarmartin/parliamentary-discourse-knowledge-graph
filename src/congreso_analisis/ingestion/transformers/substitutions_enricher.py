@@ -80,7 +80,7 @@ class SubstitutionsEnricher:
             return ""
 
         try:
-            # Try to infer datetime - usually Spanish dates arrive as DD/MM/YYYY or similar
+            # Try to infer datetime - usually source dates are in DD/MM/YYYY format
             parsed_date = pd.to_datetime(date_str, dayfirst=True)
             return cast(str, parsed_date.strftime("%Y-%m-%d"))
         except Exception:
@@ -134,8 +134,8 @@ class SubstitutionsEnricher:
         deputies_df_work = deputies_df.copy()
         deputies_df_work["_normalized_name"] = deputies_df_work[name_col].apply(self._normalize_name)
 
-        # In case a name resolves to multiple IDs unexpectedly, take the first to avoid explosions.
-        # Ideally, Bronze names are unique per legislature.
+        # In case a name resolves to multiple IDs unexpectedly, take the first to avoid collisions.
+        # Ideally, names are unique per legislature in the Bronze layer.
         name_to_id: Dict[str, str] = (
             deputies_df_work.drop_duplicates(subset=["_normalized_name"])
             .set_index("_normalized_name")["deputy_id"]
@@ -180,7 +180,7 @@ class SubstitutionsEnricher:
         # 4. Create Relationships DataFrame based on IDs
         relationships_data = []
 
-        # Iterate over the valid substitution records
+        # Iterate over valid substitution records
         for _, row in substitutions_renamed.dropna(subset=["substitutes", "substituted_by"], how="all").iterrows():
             # Source name
             source_norm_name = row.get("_normalized_name", "")

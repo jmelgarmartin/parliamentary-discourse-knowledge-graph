@@ -31,9 +31,9 @@ class InterventionsExtractor:
             return pd.DataFrame()
 
         new_records = []
-        for f in files_to_process:
-            recs = self._process_file(f)
-            new_records.extend(recs)
+        for file in files_to_process:
+            extracted_records = self._process_file(file)
+            new_records.extend(extracted_records)
 
         df_new = pd.DataFrame(new_records)
 
@@ -61,15 +61,15 @@ class InterventionsExtractor:
         doc_id = file_path.stem
 
         try:
-            with open(file_path, "rb") as f:
-                content = f.read()
+            with open(file_path, "rb") as file:
+                content = file.read()
             soup = BeautifulSoup(content, "html.parser")
         except Exception as e:
             logger.error(f"Error loading {file_path}: {e}")
             return []
 
-        for s in soup(["script", "style"]):
-            s.decompose()
+        for tag in soup(["script", "style"]):
+            tag.decompose()
 
         text_blocks = [s.strip() for s in soup.get_text(separator="\n").splitlines() if s.strip()]
 
@@ -115,7 +115,7 @@ class InterventionsExtractor:
 
                 # If it's pure narrative (according to validator but without being a header),
                 # accumulate but don't open the turn yet (could be noise between annotation and speech)
-                if not SpeakerValidator.is_likely_speaker(text):
+                if SpeakerValidator.is_likely_speaker(text):
                     current_text_fragments.append(text)
                     continue
 

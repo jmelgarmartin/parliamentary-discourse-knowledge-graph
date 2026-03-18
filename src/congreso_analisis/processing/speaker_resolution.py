@@ -85,14 +85,14 @@ class GovernmentManualManager:
             # 1. Direct match on canonical_person_key
             match = self.df[self.df["canonical_person_key"] == norm_name]
             if not match.empty:
-                return match.iloc[0].to_dict()
+                return dict(match.iloc[0].to_dict())
 
             # 2. Search in aliases
             # We use a simple loop over rows as the DF is small (< 1000 rows)
             for _, row in self.df.iterrows():
                 aliases = [a.strip().upper() for a in str(row.get("aliases", "")).split(";")]
                 if norm_name in aliases:
-                    return row.to_dict()
+                    return dict(row.to_dict())
 
             # 3. Subset/Swap/Fuzzy matching (Smart matching)
             target_tokens = set(norm_name.split())
@@ -100,27 +100,26 @@ class GovernmentManualManager:
                 row_key = str(row["canonical_person_key"])
                 row_tokens = set(row_key.split())
 
-                # Swap or Subset (if at least 2 tokens match)
                 if (target_tokens == row_tokens and len(target_tokens) > 1) or (
                     (target_tokens.issubset(row_tokens) or row_tokens.issubset(target_tokens))
                     and len(target_tokens.intersection(row_tokens)) >= 2
                 ):
-                    return row.to_dict()
+                    return dict(row.to_dict())
 
                 # High-confidence Fuzzy (for OCR errors)
                 if SequenceMatcher(None, norm_name, row_key).ratio() > 0.85:
-                    return row.to_dict()
+                    return dict(row.to_dict())
 
         if cargo_hint:
             norm_cargo = SpeakerNormalizer.normalize_text(cargo_hint)
             if norm_cargo:
                 match = self.df[self.df["preferred_cargo"] == norm_cargo]
                 if not match.empty:
-                    return match.iloc[0].to_dict()
+                    return dict(match.iloc[0].to_dict())
 
         return None
 
-    def add_or_update_entry(self, person_key: str, label_variant: str, name_hint: str, cargo: str):
+    def add_or_update_entry(self, person_key: str, label_variant: str, name_hint: str, cargo: str) -> None:
         """
         Add a new entry or update an existing one by person_key.
         Enforces strict name vs cargo separation.
@@ -176,7 +175,7 @@ class GovernmentManualManager:
                 self._modified = True
                 logger.debug(f"New alias added to {pk}: {label_variant}")
 
-    def consolidate_entries(self):
+    def consolidate_entries(self) -> None:
         """
         Phase 6: Consolidate equivalent entries.
         - Merge name swaps (PEREZ SANCHEZ vs SANCHEZ PEREZ).
@@ -292,7 +291,7 @@ class GovernmentManualManager:
         self._modified = True
         logger.info(f"Consolidation complete: {initial_count} -> {len(self.df)} rows.")
 
-    def save_if_modified(self):
+    def save_if_modified(self) -> None:
         # Always run consolidation before saving to ensure quality
         if self._modified:
             self.consolidate_entries()
@@ -315,11 +314,11 @@ class SpeakerResolver:
         self._prepare_deputy_index()
         self.manual_manager = GovernmentManualManager(manual_dict_path)
 
-    def _prepare_deputy_index(self):
+    def _prepare_deputy_index(self) -> None:
         """Pre-calculate normalized versions of deputy names."""
         self.deputy_names = []
         for name in self.df_deputies["name"].dropna():
-            norm = SpeakerNormalizer.normalize_text(name)
+            norm = SpeakerNormalizer.robust_person_normalization(name)
             self.deputy_names.append(norm)
 
     def _find_match(self, name_hint: str) -> Tuple[Optional[str], float, str]:
@@ -409,10 +408,10 @@ class SpeakerResolver:
                 match_paren = re.search(r"\(([^)]+)\)", label)
                 cand_a = ""
                 if match_paren:
-                    cand_a = SpeakerNormalizer.clean_treatment(match_paren.group(1))
+                    cand_a = SpeakerNormalizer.robust_person_normalization(match_paren.group(1))
 
                 cand_b_raw = re.sub(r"\(.*?\)", "", label).strip()
-                cand_b = SpeakerNormalizer.clean_treatment(cand_b_raw)
+                cand_b = SpeakerNormalizer.robust_person_normalization(cand_b_raw)
                 name_hint = cand_b  # default fallback
 
                 if status in [
@@ -429,7 +428,9 @@ class SpeakerResolver:
                     # 2. If A fails or doesn't exist, attempt with B
                     if not matched_name and cand_b:
                         matched_name, confidence, method = self._find_match(cand_b)
-                        name_hint = cand_b if not matched_name else name_hint
+                        # Only update name_hint to cand_b if we found a match or if we don't have cand_a
+                        if matched_name or not cand_a:
+                            name_hint = cand_b
 
                     # Specific logic for GOV (Phase 4.1: Fallback to manual dictionary)
                     if status == SpeakerStatus.GOV:
@@ -516,7 +517,7 @@ class SpeakerResolver:
             return
 
         # 3. Add canonical_person_key for grouping (for GOV/UNRESOLVED)
-        def get_group_key(row):
+        def get_group_key(row: "pd.Series[object]") -> str:
             label = str(row["speaker_label"])
             # Try to resolve via manual dictionary first to use consolidated keys
             match_paren = re.search(r"\(([^)]+)\)", label)
@@ -527,7 +528,7 @@ class SpeakerResolver:
             if p_name:
                 m_entry = self.manual_manager.find_entry(p_name)
                 if m_entry:
-                    return m_entry["canonical_person_key"]
+                    return str(m_entry["canonical_person_key"])
                 return p_name
 
             # Fallback for when there's no parenthesis
@@ -535,8 +536,8 @@ class SpeakerResolver:
             p_name_b = SpeakerNormalizer.robust_person_normalization(cand_b_raw)
             m_entry_b = self.manual_manager.find_entry(p_name_b)
             if m_entry_b:
-                return m_entry_b["canonical_person_key"]
-            return p_name_b
+                return str(m_entry_b["canonical_person_key"])
+            return str(p_name_b)
 
         to_review["canonical_person_key"] = to_review.apply(get_group_key, axis=1)
 
@@ -581,6 +582,6 @@ class SpeakerResolver:
         except Exception as e:
             logger.error(f"Error writing report: {e}")
 
-    def save_manual_dictionary(self):
+    def save_manual_dictionary(self) -> None:
         """Persist changes to the government dictionary."""
         self.manual_manager.save_if_modified()

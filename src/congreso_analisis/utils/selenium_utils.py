@@ -53,6 +53,7 @@ def accept_cookies(driver: webdriver.Chrome, wait: WebDriverWait[webdriver.Chrom
     :param wait: WebDriverWait instance.
     """
     try:
+        # XPath uses Spanish text as it matches the Congress website button label
         wait.until(EC.element_to_be_clickable((By.XPATH, "//a[normalize-space(text())='Aceptar todas']"))).click()
         logger.info("Cookies accepted.")
     except Exception as e:
@@ -114,7 +115,8 @@ def click_with_wait(
 
 def _parse_pagination_text(text: str) -> Tuple[Optional[int], Optional[int], Optional[int]]:
     """
-    Private helper to parse the pagination text 'Resultados X a Y de Z'.
+    Private helper to parse the pagination text.
+    Expected format: 'Resultados X a Y de Z' (Spanish).
 
     :param text: Text string to parse.
     :return: Tuple of (from_val, to_val, total_val) or (None, None, None).
@@ -145,7 +147,7 @@ def is_last_page(driver: webdriver.Chrome, element_id: str) -> bool:
     return False
 
 
-def click_siguiente_pagina(
+def click_next_page(
     driver: webdriver.Chrome,
     wait: WebDriverWait[webdriver.Chrome],
     next_xpath: str,
@@ -154,8 +156,8 @@ def click_siguiente_pagina(
     paginator_id: Optional[str] = None,
 ) -> bool:
     """
-    Attempts to click the next page button and waits for the content to update.
-    Uses a page signature to detect real progress.
+    Finds the 'Next' button and clicks it, then waits for the results to load.
+    The method verifies that the page content has changed before returning.
 
     :param driver: Selenium browser driver.
     :param wait: WebDriverWait object.
@@ -189,13 +191,11 @@ def click_siguiente_pagina(
         try:
             next_btn = driver.find_element(By.XPATH, next_xpath)
         except Exception:
-            # Fallback search within the same container if possible
+            # Fallback search within the same container if possible.
             # We assume next_xpath usually points to something like //ul[...]//a[...]
-            # Let's try to extract the base container from xpath if simple enough, or just log info
+            # Let's try to extract the base container from xpath if simple enough, or just log info.
             logger.info(f"Next button not found with xpath: {next_xpath}. Assuming last page.")
             return False
-
-        # Check if disabled
         class_attr = (next_btn.get_attribute("class") or "").lower()
         aria_disabled = next_btn.get_attribute("aria-disabled") == "true"
         is_visible = next_btn.is_displayed()
@@ -242,7 +242,7 @@ def click_siguiente_pagina(
             return False
 
     except Exception as e:
-        logger.error(f"Unexpected error in click_siguiente_pagina: {e}")
+        logger.error(f"Unexpected error in click_next_page: {e}")
         return False
 
 

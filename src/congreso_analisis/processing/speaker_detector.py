@@ -31,7 +31,7 @@ class SpeakerDetector:
 
     # Pattern for embedded speaker at the end of an annotation: (Applause.-Mr. ...)
     RE_EMBEDDED_MARKER = re.compile(
-        r"(\.-|\.\s+)(El señor|La señora|Los señores|Las señoras|PRESIDENT[EA])\s+([A-ZÁÉÍÓÚÑ\s]+)$", re.IGNORECASE
+        r"(\.|\-|\s)+((?:El|La|Los|Las)\s+señor[aes]*|PRESIDENT[EA])\s+([A-ZÁÉÍÓÚÑ\s]+)$", re.IGNORECASE
     )
 
     @classmethod

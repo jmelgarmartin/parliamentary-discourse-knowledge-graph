@@ -17,7 +17,7 @@ import duckdb
 import pandas as pd
 from congreso_analisis.utils.selenium_utils import (
     accept_cookies,
-    click_siguiente_pagina,
+    click_next_page,
     click_with_wait,
     init_driver,
     is_last_page,
@@ -198,7 +198,7 @@ class DeputiesScraper:
         group = cells[0].text.strip() if len(cells) > 0 else ""
         constituency = cells[1].text.strip() if len(cells) > 1 else ""
 
-        # Extract deputy_id from url_ficha (codParlamentario parameter)
+        # Extract deputy_id from profile_url (codParlamentario parameter)
         deputy_id = ""
         match = re.search(r"codParlamentario=(\d+)", url_ficha)
         if match:
@@ -315,7 +315,7 @@ class DeputiesScraper:
                             substituted_by = ""
 
                             # Robust parsing of relationship text
-                            # Variations: Sustituye a, Sustituyó a, Sustituida por, Sustituido por
+                            # Variations in Spanish: Sustituye a, Sustituyó a, Sustituida por, Sustituido por
                             if "sustituy" in rel_text:
                                 # If it's incoming: "Sustituye a:" or "Sustituyó a:"
                                 if "sustituy" in rel_text and " por" not in rel_text:
@@ -414,12 +414,13 @@ class DeputiesScraper:
                     logger.info("Last page detected.")
                     break
 
-                if not click_siguiente_pagina(
+                if not click_next_page(
                     driver=self.driver,
                     wait=self.wait,
                     next_xpath="//ul[@id='_diputadomodule_paginationLinksDiputados']//a[text()='>']",
                     table_by=By.CSS_SELECTOR,
                     table_selector="#_diputadomodule_contentPaginationDiputados table tbody tr",
+                    paginator_id="_diputadomodule_resultsShowedFooterDiputados",
                 ):
                     break
         except Exception as e:

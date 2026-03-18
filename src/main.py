@@ -17,7 +17,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from congreso_analisis.ingestion.scrappers.deputies_scraper import DeputiesScraper  # noqa: E402
 from congreso_analisis.ingestion.scrappers.groups_scraper import GroupsScraper  # noqa: E402
 from congreso_analisis.ingestion.scrappers.sessions_scraper import SessionsScraper  # noqa: E402
-from congreso_analisis.ingestion.transformers.enriquecedor_suplencias import EnriquecedorSuplencias  # noqa: E402
+from congreso_analisis.ingestion.transformers.substitutions_enricher import SubstitutionsEnricher  # noqa: E402
 from congreso_analisis.silver.enrich_legislature import run_enrichment as run_interventions_enrichment  # noqa: E402
 from congreso_analisis.silver.interventions_extractor import InterventionsExtractor  # noqa: E402
 
@@ -31,7 +31,7 @@ def setup_logging(process_name: str, log_level: str = "INFO") -> None:
 
     import datetime
 
-    # Format: fecha y hora minuto (e.g., 2026-03-03_1652) despues _ y el nombre del proceso
+    # Format: YYYY-MM-DD_HHMM followed by the process name (e.g., 2026-03-03_1652_pipeline_execution.log)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M")
     log_filename = f"{timestamp}_{process_name}.log"
 
@@ -148,7 +148,7 @@ def main() -> None:
         logger.warning(f"Substitutions file not found at {substitutions_path}. Proceeding with empty substitutions.")
         substitutions_df = pd.DataFrame(columns=["name", "substitutes", "substituted_by", "start_date", "end_date"])
 
-    enricher = EnriquecedorSuplencias()
+    enricher = SubstitutionsEnricher()
     silver_deputies_df, silver_relationships_df = enricher.enrich(deputies_df, substitutions_df)
 
     # --- SECTION D: Validation & Match Check ---

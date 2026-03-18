@@ -16,7 +16,7 @@ import duckdb
 import pandas as pd
 from congreso_analisis.utils.selenium_utils import (
     accept_cookies,
-    click_siguiente_pagina,
+    click_next_page,
     click_with_wait,
     init_driver,
     is_last_page,
@@ -205,7 +205,7 @@ class GroupsScraper:
         wait_for_spinner(self.wait)
 
         try:
-            # Click on the "Altas y bajas" radio button
+            # Click on the 'Altas y bajas' (Additions and Removals) radio button
             click_with_wait(self.driver, self.wait, By.ID, "_grupos_altaBajaA")
             wait_for_spinner(self.wait)
             self.wait.until(EC.presence_of_element_located((By.ID, "_grupos_ajaxContentDiputados")))
@@ -244,7 +244,7 @@ class GroupsScraper:
             if is_last_page(self.driver, "_grupos_resultsShowedFooterDiputados"):
                 break
 
-            if not click_siguiente_pagina(
+            if not click_next_page(
                 driver=self.driver,
                 wait=self.wait,
                 next_xpath="//ul[@id='_grupos_paginationLinksDiputados']//a[text()='>']",
@@ -267,7 +267,7 @@ class GroupsScraper:
         self._init_db()
         self._init_driver()
 
-        # We classify groups dataset as a whole snapshot (1 document logically per term)
+        # We classify groups dataset as a whole snapshot (1 dataset logically per legislature)
         document_id = f"groups_snapshot_term_{self.term}"
 
         try:

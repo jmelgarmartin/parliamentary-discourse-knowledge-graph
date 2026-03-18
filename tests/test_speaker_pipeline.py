@@ -20,26 +20,27 @@ DEPUTIES_DATA = [
 ]
 
 
-@pytest.fixture
-def resolver():
+@pytest.fixture  # type: ignore[misc]
+def resolver(tmp_path: object) -> SpeakerResolver:
     df_deps = pd.DataFrame(DEPUTIES_DATA)
-    return SpeakerResolver(df_deps)
+    manual_path = tmp_path / "government_manual_mapping.csv"  # type: ignore[operator]
+    return SpeakerResolver(df_deps, str(manual_path))
 
 
-def test_validation():
-    # Casos que DEBEN ser válidos
-    assert SpeakerValidator.is_likely_speaker("El señor RODRÍGUEZ GÓMEZ DE CELIS")
-    assert SpeakerValidator.is_likely_speaker("La señora PRESIDENTA")
-    assert SpeakerValidator.is_likely_speaker("REPRESENTANTE DEL PARLAMENTO DE CATALUÑA (Munell i Garcia)")
+def test_validation() -> None:
+    # Cases that MUST be valid (Headers now require :)
+    assert SpeakerValidator.is_likely_speaker("El señor RODRÍGUEZ GÓMEZ DE CELIS:")
+    assert SpeakerValidator.is_likely_speaker("La señora PRESIDENTA:")
+    assert SpeakerValidator.is_likely_speaker("REPRESENTANTE DEL PARLAMENTO DE CATALUÑA (Munell i Garcia):")
 
-    # Casos que DEBEN ser inválidos (Narrativa)
+    # Cases that MUST be invalid (Narrative)
     assert not SpeakerValidator.is_likely_speaker("Tellado me pedía antes la palabra con base en el artículo 72")
     assert not SpeakerValidator.is_likely_speaker("Abascal no está -¿para qué se va a quedar a escucharnos?")
     assert not SpeakerValidator.is_likely_speaker("Feijóo dijo que España tenía que aprender")
     assert not SpeakerValidator.is_likely_speaker("Pisarello hablaba de tres bloques")
 
 
-def test_classification_and_matching(resolver):
+def test_classification_and_matching(resolver: SpeakerResolver) -> None:
     # 1. Institutional Role
     df_test = pd.DataFrame([{"speaker_label": "La señora PRESIDENTA", "document_id": "test"}])
     res = resolver.resolver(df_test)
@@ -56,7 +57,7 @@ def test_classification_and_matching(resolver):
     # 3. Other Institutional
     df_test = pd.DataFrame([{"speaker_label": "DEFENSOR DEL PUEBLO (Gabilondo Pujol)", "document_id": "test"}])
     res = resolver.resolver(df_test)
-    assert res.iloc[0]["speaker_status"] == SpeakerStatus.OTHER_INSTITUTIONAL.value
+    assert res.iloc[0]["speaker_status"] == SpeakerStatus.OTHER_INST.value
 
     # 4. Exact Match
     df_test = pd.DataFrame([{"speaker_label": "El señor RODRÍGUEZ GÓMEZ DE CELIS", "document_id": "test"}])
@@ -68,7 +69,7 @@ def test_classification_and_matching(resolver):
     df_test = pd.DataFrame([{"speaker_label": "La señora GAMARA RUIZ-CLAVIJO", "document_id": "test"}])
     res = resolver.resolver(df_test)
     assert res.iloc[0]["speaker_status"] == SpeakerStatus.MATCHED_DEPUTY.value
-    assert res.iloc[0]["match_method"] == "fuzzy_surname"
+    assert res.iloc[0]["match_method"] == "fuzzy_match"
     assert "Gamarra Ruiz-Clavijo" in res.iloc[0]["matched_name"]
 
     # 6. Normalization (OCR Error: PERALTARAMOS -> PERALTA-RAMOS)
@@ -77,7 +78,7 @@ def test_classification_and_matching(resolver):
     assert res.iloc[0]["speaker_status"] == SpeakerStatus.MATCHED_DEPUTY.value
     assert "Alvarez de Toledo" in res.iloc[0]["matched_name"]
 
-    # 7. Prefix normalización (DE OLANO VELA)
+    # 7. Prefix normalization (DE OLANO VELA)
     df_test = pd.DataFrame([{"speaker_label": "DE OLANO VELA", "document_id": "test"}])
     res = resolver.resolver(df_test)
     assert res.iloc[0]["speaker_status"] == SpeakerStatus.MATCHED_DEPUTY.value

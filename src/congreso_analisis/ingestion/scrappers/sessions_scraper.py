@@ -20,7 +20,7 @@ import duckdb
 import pandas as pd
 from congreso_analisis.utils.selenium_utils import (
     accept_cookies,
-    click_siguiente_pagina,
+    click_next_page,
     click_with_wait,
     init_driver,
     select_option_by_value,
@@ -345,12 +345,12 @@ class SessionsScraper:
                 return None
 
         try:
-            # Try to find "Texto íntegro" or fallback to any link
+            # Try to find link by text or fallback to any link
             try:
-                texto_link = row.find_element(By.XPATH, ".//a[contains(text(),'Texto íntegro')]")
+                text_link = row.find_element(By.XPATH, ".//a[contains(text(),'Texto íntegro')]")
             except Exception:
-                texto_link = row.find_element(By.TAG_NAME, "a")
-            document_url = texto_link.get_attribute("href") or ""
+                text_link = row.find_element(By.TAG_NAME, "a")
+            document_url = text_link.get_attribute("href") or ""
         except Exception:
             return None
 
@@ -473,7 +473,7 @@ class SessionsScraper:
                     pass
 
                 # Try clicking next page using utility
-                if not click_siguiente_pagina(self.driver, self.wait, xpath_next, By.XPATH, table_selector):
+                if not click_next_page(self.driver, self.wait, xpath_next, By.XPATH, table_selector):
                     logger.info("No next page link found.")
                     break
 

@@ -25,7 +25,7 @@ class GraphBuilder:
     def validate_dataframe(self, df: pd.DataFrame) -> bool:
         """
         Validates if the dataframe has the required columns for graph injection.
-        The 'legislatura' column is checked for presence if required.
+        The 'legislature' column is checked for presence if required.
 
         :param df: Input DataFrame from Silver layer.
         :return: True if valid, False otherwise.

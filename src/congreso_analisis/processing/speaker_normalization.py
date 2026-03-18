@@ -67,7 +67,15 @@ class SpeakerNormalizer:
         if not text:
             return ""
 
-        # 1. Basic normalization (accents, uppercase, OCR tolerance)
+        # 1. Handle "Surnames, Name" format (common in deputy lists)
+        # We prioritize the first part (surnames) if it exists
+        # We do this BEFORE normalize_text because it might strip the comma
+        if "," in text:
+            parts = text.split(",", 1)
+            if len(parts[0].strip()) > 3:
+                text = parts[0]
+
+        # 2. Basic normalization (accents, uppercase, OCR tolerance)
         text = SpeakerNormalizer.normalize_text(text)
 
         # 2. Specific cleaning for person names: Remove roles and treatments

@@ -20,8 +20,8 @@ def run_enrichment(
     if raw_parquet_path is None:
         raw_parquet_path = f"data/silver/interventions/legislature={legislature}/interventions_raw.parquet"
     if output_parquet_path is None:
-        out_p = f"data/silver/interventions/legislature={legislature}/interventions_enriched.parquet"
-        output_parquet_path = out_p
+        output_path = f"data/silver/interventions/legislature={legislature}/interventions_enriched.parquet"
+        output_parquet_path = output_path
 
     path_obj = pathlib.Path(raw_parquet_path)
     if not path_obj.exists():
@@ -79,8 +79,10 @@ if __name__ == "__main__":
 
     cli_args = parser.parse_args()
 
-    leg = cli_args.legislature
-    in_p = cli_args.input or f"data/silver/interventions/legislature={leg}/interventions_raw.parquet"
-    out_p_cli = cli_args.output or f"data/silver/interventions/legislature={leg}/interventions_enriched.parquet"
+    legislature_id = cli_args.legislature
+    input_path = cli_args.input or f"data/silver/interventions/legislature={legislature_id}/interventions_raw.parquet"
+    output_path_cli = (
+        cli_args.output or f"data/silver/interventions/legislature={legislature_id}/interventions_enriched.parquet"
+    )
 
-    run_enrichment(leg, in_p, out_p_cli)
+    run_enrichment(legislature_id, input_path, output_path_cli)

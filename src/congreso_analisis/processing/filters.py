@@ -28,8 +28,8 @@ def is_admin_block(text: str, min_namelike_lines: int = 30) -> bool:
         return False
 
     name_like_count = 0
-    # Pattern: UPPERCASE NAMES, Optional comma + Name
-    name_pat = re.compile(r"^[A-ZÁÉÍÓÚÜÑ\-\s]+(?:,\s+.+)?$")
+    # Pattern: NAMES, Optional comma + Name (Allowing Title Case for admin blocks)
+    name_pat = re.compile(r"^[A-ZÁÉÍÓÚÜÑa-záéíóúüñ\-\s]+(?:,\s+.+)?$")
 
     for line in lines:
         if name_pat.match(line):

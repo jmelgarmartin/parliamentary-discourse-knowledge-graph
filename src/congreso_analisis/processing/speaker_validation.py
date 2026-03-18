@@ -163,14 +163,31 @@ class SpeakerValidator:
 
         # 3. Institutional Roles (No prefix or special cases)
         if has_colon:
-            pure_roles = ["PRESIDENTE", "PRESIDENCIA", "VICEPRESIDENTE", "SECRETARIO", "MINISTRO", "MINISTRA"]
+            pure_roles = [
+                "PRESIDENTE",
+                "PRESIDENCIA",
+                "VICEPRESIDENTE",
+                "SECRETARIO",
+                "MINISTRO",
+                "MINISTRA",
+                "REPRESENTANTE",
+                "DEFENSOR",
+            ]
             header_no_colon = text_strip[:-1].strip()
             header_upper = header_no_colon.upper()
 
             if any(role in header_upper for role in pure_roles):
-                count_upper = sum(1 for c in header_no_colon if c.isupper())
-                count_lower = sum(1 for c in header_no_colon if c.islower())
+                # Ignore parentheses content for casing balance (candidates have long lowercase descriptions)
+                header_check = re.sub(r"\(.*?\)", "", header_no_colon).strip()
+                count_upper = sum(1 for c in header_check if c.isupper())
+                count_lower = sum(1 for c in header_check if c.islower())
                 if count_upper > count_lower or count_lower == 0:
+                    return True
+
+            # 4. All-Uppercase Headers (Name format without prefix)
+            if header_upper == header_no_colon and len(header_no_colon) >= 5:
+                # Must contain at least one space to look like a full name (Surname Surname)
+                if " " in header_no_colon:
                     return True
 
         return False

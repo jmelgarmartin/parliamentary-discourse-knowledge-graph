@@ -1,5 +1,5 @@
 """
-Tests unitarios de las utilidades.
+Unit tests for utilities.
 """
 from congreso_analisis.utils.hashing import text_to_hash
 from congreso_analisis.utils.logging_utils import setup_logger
@@ -7,22 +7,22 @@ from congreso_analisis.utils.time_utils import get_current_partition_date
 
 
 def test_hashing() -> None:
-    """Prueba hashing stub."""
+    """Tests hashing stub."""
     assert text_to_hash("test") == ""
 
 
 def test_time_utils() -> None:
-    """Prueba time_utils stub."""
+    """Tests time_utils stub."""
     assert get_current_partition_date() == ""
 
 
 def test_logging_utils() -> None:
-    """Prueba logging_utils stub."""
+    """Tests logging_utils stub."""
     assert setup_logger("test") is None
 
 
 def test_is_last_page_from_text() -> None:
-    """Pruebas para comprobar la lógica is_last_page_from_text."""
+    """Tests for is_last_page_from_text logic."""
     from congreso_analisis.utils.selenium_utils import is_last_page_from_text
 
     assert is_last_page_from_text("Resultados 21 a 40 de 113") is False
@@ -33,7 +33,7 @@ def test_is_last_page_from_text() -> None:
 
 
 def test_parse_pagination_text() -> None:
-    """Prueba el ayudante privado de parseo de texto de paginación."""
+    """Tests the private pagination text parsing helper."""
     from congreso_analisis.utils.selenium_utils import _parse_pagination_text
 
     f, t, z = _parse_pagination_text("Resultados 1 a 20 de 100")
@@ -54,8 +54,8 @@ def test_parse_pagination_text() -> None:
 
 def test_paginate_table_no_progress() -> None:
     """
-    Prueba que paginate_table rompe el bucle si detecta que la página no avanza
-    usando la firma de la página.
+    Tests that paginate_table breaks the loop if it detects that the page does not advance
+    using the page signature.
     """
     from unittest.mock import MagicMock
 
@@ -106,18 +106,18 @@ def test_paginate_table_no_progress() -> None:
         max_pages=10,
     )
 
-    # El generador debe retornar solo 1 página porque el wait falló en la firma de cambio
+    # The generator should return only 1 page because the wait failed on the signature change
     pages = list(generator)
     assert len(pages) == 1
     assert len(pages[0]) == 1
     assert pages[0][0].text == "Fila idéntica constante"
 
 
-def test_click_siguiente_pagina_no_button() -> None:
-    """Prueba que click_siguiente_pagina devuelve False si no encuentra el botón."""
+def test_click_next_page_no_button() -> None:
+    """Tests that click_next_page returns False if the button is not found."""
     from unittest.mock import MagicMock
 
-    from congreso_analisis.utils.selenium_utils import click_siguiente_pagina
+    from congreso_analisis.utils.selenium_utils import click_next_page
 
     mock_driver = MagicMock()
     mock_wait = MagicMock()
@@ -127,17 +127,17 @@ def test_click_siguiente_pagina_no_button() -> None:
 
     mock_driver.find_element.side_effect = NoSuchElementException()
 
-    result = click_siguiente_pagina(
+    result = click_next_page(
         driver=mock_driver, wait=mock_wait, next_xpath="//any_xpath", table_by="css selector", table_selector="tr"
     )
     assert result is False
 
 
-def test_click_siguiente_pagina_disabled() -> None:
-    """Prueba que click_siguiente_pagina devuelve False si el botón está deshabilitado."""
+def test_click_next_page_disabled() -> None:
+    """Tests that click_next_page returns False if the button is disabled."""
     from unittest.mock import MagicMock
 
-    from congreso_analisis.utils.selenium_utils import click_siguiente_pagina
+    from congreso_analisis.utils.selenium_utils import click_next_page
 
     mock_driver = MagicMock()
     mock_wait = MagicMock()
@@ -149,17 +149,17 @@ def test_click_siguiente_pagina_disabled() -> None:
     # We need to make sure find_element returns the button
     mock_driver.find_element.return_value = mock_btn
 
-    result = click_siguiente_pagina(
+    result = click_next_page(
         driver=mock_driver, wait=mock_wait, next_xpath="//any_xpath", table_by="css selector", table_selector="tr"
     )
     assert result is False
 
 
-def test_click_siguiente_pagina_no_progress() -> None:
-    """Prueba que click_siguiente_pagina devuelve False si la firma no cambia tras el click."""
+def test_click_next_page_no_progress() -> None:
+    """Tests that click_next_page returns False if the signature does not change after click."""
     from unittest.mock import MagicMock
 
-    from congreso_analisis.utils.selenium_utils import click_siguiente_pagina
+    from congreso_analisis.utils.selenium_utils import click_next_page
 
     mock_driver = MagicMock()
     mock_wait = MagicMock()
@@ -186,7 +186,7 @@ def test_click_siguiente_pagina_no_progress() -> None:
 
     mock_wait.until.side_effect = TimeoutException()
 
-    result = click_siguiente_pagina(
+    result = click_next_page(
         driver=mock_driver,
         wait=mock_wait,
         next_xpath="//any_xpath",
@@ -197,11 +197,11 @@ def test_click_siguiente_pagina_no_progress() -> None:
     assert result is False
 
 
-def test_click_siguiente_pagina_success() -> None:
-    """Prueba que click_siguiente_pagina devuelve True si avanza correctamente."""
+def test_click_next_page_success() -> None:
+    """Tests that click_next_page returns True if it advances correctly."""
     from unittest.mock import MagicMock
 
-    from congreso_analisis.utils.selenium_utils import click_siguiente_pagina
+    from congreso_analisis.utils.selenium_utils import click_next_page
 
     mock_driver = MagicMock()
     mock_wait = MagicMock()
@@ -221,7 +221,7 @@ def test_click_siguiente_pagina_success() -> None:
     mock_driver.find_element.side_effect = find_element_side
     mock_wait.until.return_value = True  # Signature change wait succeeds
 
-    result = click_siguiente_pagina(
+    result = click_next_page(
         driver=mock_driver,
         wait=mock_wait,
         next_xpath="//any_xpath",
