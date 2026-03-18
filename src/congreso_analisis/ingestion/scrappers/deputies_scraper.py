@@ -17,7 +17,7 @@ import duckdb
 import pandas as pd
 from congreso_analisis.utils.selenium_utils import (
     accept_cookies,
-    click_next_page,
+    click_siguiente_pagina,
     click_with_wait,
     init_driver,
     is_last_page,
@@ -414,7 +414,7 @@ class DeputiesScraper:
                     logger.info("Last page detected.")
                     break
 
-                if not click_next_page(
+                if not click_siguiente_pagina(
                     driver=self.driver,
                     wait=self.wait,
                     next_xpath="//ul[@id='_diputadomodule_paginationLinksDiputados']//a[text()='>']",

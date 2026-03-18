@@ -17,7 +17,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from congreso_analisis.ingestion.scrappers.deputies_scraper import DeputiesScraper  # noqa: E402
 from congreso_analisis.ingestion.scrappers.groups_scraper import GroupsScraper  # noqa: E402
 from congreso_analisis.ingestion.scrappers.sessions_scraper import SessionsScraper  # noqa: E402
-from congreso_analisis.ingestion.transformers.substitutions_enricher import SubstitutionsEnricher  # noqa: E402
+from congreso_analisis.ingestion.transformers.enriquecedor_suplencias import EnriquecedorSuplencias  # noqa: E402
 from congreso_analisis.silver.enrich_legislature import run_enrichment as run_interventions_enrichment  # noqa: E402
 from congreso_analisis.silver.interventions_extractor import InterventionsExtractor  # noqa: E402
 
@@ -148,7 +148,7 @@ def main() -> None:
         logger.warning(f"Substitutions file not found at {substitutions_path}. Proceeding with empty substitutions.")
         substitutions_df = pd.DataFrame(columns=["name", "substitutes", "substituted_by", "start_date", "end_date"])
 
-    enricher = SubstitutionsEnricher()
+    enricher = EnriquecedorSuplencias()
     silver_deputies_df, silver_relationships_df = enricher.enrich(deputies_df, substitutions_df)
 
     # --- SECTION D: Validation & Match Check ---
