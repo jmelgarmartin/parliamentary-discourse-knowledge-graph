@@ -112,6 +112,21 @@ def click_with_wait(
     driver.execute_script("arguments[0].click();", element)
 
 
+def _parse_pagination_text(text: str) -> Tuple[Optional[int], Optional[int], Optional[int]]:
+    """
+    Private helper to parse the pagination text 'Resultados X a Y de Z'.
+
+    :param text: Text string to parse.
+    :return: Tuple of (from_val, to_val, total_val) or (None, None, None).
+    """
+    if not text:
+        return None, None, None
+    match = re.search(r"Resultados (\d+) a (\d+) de (\d+)", text)
+    if match:
+        return int(match.group(1)), int(match.group(2)), int(match.group(3))
+    return None, None, None
+
+
 def is_last_page(driver: webdriver.Chrome, element_id: str) -> bool:
     """
     Determines if the current page is the last one according to the paginator text.
@@ -122,10 +137,8 @@ def is_last_page(driver: webdriver.Chrome, element_id: str) -> bool:
     """
     try:
         text = driver.find_element(By.ID, element_id).text
-        match = re.search(r"Resultados (\d+) a (\d+) de (\d+)", text)
-        if match:
-            to_val = int(match.group(2))
-            total_val = int(match.group(3))
+        _, to_val, total_val = _parse_pagination_text(text)
+        if to_val is not None and total_val is not None:
             return to_val >= total_val
     except Exception:
         pass
@@ -229,7 +242,7 @@ def click_siguiente_pagina(
             return False
 
     except Exception as e:
-        logger.error(f"Unexpected error in click_next_page: {e}")
+        logger.error(f"Unexpected error in click_siguiente_pagina: {e}")
         return False
 
 
@@ -243,9 +256,8 @@ def get_results_range(driver: webdriver.Chrome, element_id: str) -> Tuple[Option
     """
     try:
         text = driver.find_element(By.ID, element_id).text
-        match = re.search(r"Resultados (\d+) a (\d+) de (\d+)", text)
-        if match:
-            return int(match.group(2)), int(match.group(3))
+        _, to_val, total_val = _parse_pagination_text(text)
+        return to_val, total_val
     except Exception:
         pass
     return None, None
@@ -289,10 +301,8 @@ def is_last_page_from_text(text: str) -> bool:
     """
     if not text:
         return False
-    match = re.search(r"Resultados \d+ a (\d+) de (\d+)", text)
-    if match:
-        to_val = int(match.group(1))
-        total_val = int(match.group(2))
+    _, to_val, total_val = _parse_pagination_text(text)
+    if to_val is not None and total_val is not None:
         return to_val >= total_val
     return False
 
