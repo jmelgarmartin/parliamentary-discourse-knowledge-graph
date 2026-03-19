@@ -256,10 +256,14 @@ def main() -> None:
         streaming_count = 0
         batch_subset_count = 0
         parity_status = "MATCH"
+        doc_level_parity = "MATCH"
+        mismatched_docs = []
+        docs_compared = 0
         skip_reason = None
 
         if not new_files:
             parity_status = "SKIPPED"
+            doc_level_parity = "SKIPPED"
             skip_reason = "no_new_files"
             logger.info("Parity validation SKIPPED: no new session files were processed in this run.")
         else:
@@ -276,9 +280,27 @@ def main() -> None:
                 batch_subset_df = df_ext[df_ext["document_id"].isin(processed_doc_ids)]
                 batch_subset_count = len(batch_subset_df)
                 parity_status = "MATCH" if streaming_count == batch_subset_count else "MISMATCH"
+
+                # Per-document validation
+                st_counts = streaming_df.groupby("document_id").size().to_dict()
+                bt_counts = batch_subset_df.groupby("document_id").size().to_dict()
+
+                all_docs = set(st_counts.keys()) | set(bt_counts.keys())
+                docs_compared = len(all_docs)
+
+                for doc_id in all_docs:
+                    s_c = st_counts.get(doc_id, 0)
+                    b_c = bt_counts.get(doc_id, 0)
+                    if s_c != b_c:
+                        mismatched_docs.append(
+                            {"document_id": doc_id, "streaming_count": s_c, "batch_count": b_c, "diff": s_c - b_c}
+                        )
+
+                doc_level_parity = "MATCH" if not mismatched_docs else "MISMATCH"
             else:
                 logger.warning("No streaming records collected despite new files being processed.")
                 parity_status = "MISMATCH"
+                doc_level_parity = "MISMATCH"
                 skip_reason = "empty_streaming_records"
 
         # Structured Parity Report
@@ -288,8 +310,11 @@ def main() -> None:
             "streaming_count": streaming_count,
             "batch_subset_count": batch_subset_count,
             "total_batch_count": len(df_ext) if df_ext is not None else 0,
+            "docs_compared": docs_compared,
             "parity_status": parity_status,
+            "document_level_parity": doc_level_parity,
             "diff_count": streaming_count - batch_subset_count,
+            "mismatched_documents": mismatched_docs,
         }
         if skip_reason:
             report["skip_reason"] = skip_reason
@@ -302,8 +327,9 @@ def main() -> None:
             logger.info(f"Parity check: SKIPPED ({skip_reason}). Report saved to {report_file}")
         else:
             logger.info(
-                f"Parity check: Streaming={streaming_count} vs BatchSubset={batch_subset_count}. "
-                f"Status: {parity_status}. Report saved to {report_file}"
+                f"Parity check: Global={parity_status} (Stream={streaming_count}, Batch={batch_subset_count}), "
+                f"Doc-Level={doc_level_parity} ({len(mismatched_docs)} mismatches). "
+                f"Report saved to {report_file}"
             )
 
     logger.info("=========================================")

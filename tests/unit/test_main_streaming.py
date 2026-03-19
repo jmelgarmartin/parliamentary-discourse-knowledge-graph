@@ -95,6 +95,68 @@ class TestMainStreaming(unittest.TestCase):
             )
 
     @patch("main.SessionsScraper")
+    @patch("main.InterventionsExtractor")
+    @patch("main.pd.read_parquet")
+    @patch("main.pd.DataFrame.to_parquet")
+    @patch("main.argparse.ArgumentParser.parse_args")
+    @patch("main.setup_logging")
+    @patch("main.BackupManager")
+    def test_main_with_document_mismatch(
+        self,
+        mock_backup: MagicMock,
+        mock_logging: MagicMock,
+        mock_args: MagicMock,
+        mock_to_parquet: MagicMock,
+        mock_read_parquet: MagicMock,
+        mock_extractor: MagicMock,
+        mock_scraper: MagicMock,
+    ) -> None:
+        """Test global match but document-level mismatch (cross-document count errors)."""
+        mock_args.return_value = MagicMock(
+            term="15",
+            driver_path=None,
+            state_path="state/bronze.duckdb",
+            log_level="INFO",
+            headless=True,
+            experimental_streaming=True,
+        )
+
+        # Scraper triggers callback for TWO documents
+        mock_scraper_inst = mock_scraper.return_value
+
+        def scraper_run_side_effect(*args: Any, **kwargs: Any) -> Tuple[Any, List[str]]:
+            callback = kwargs.get("content_callback")
+            if callback:
+                callback("doc1", "<html>c1</html>")
+                callback("doc2", "<html>c2</html>")
+            return (MagicMock(), ["test1.html", "test2.html"])
+
+        mock_scraper_inst.run.side_effect = scraper_run_side_effect
+
+        # Streaming side: doc1 has 2 rows, doc2 has 0 rows (Total 2)
+        mock_extractor_inst = mock_extractor.return_value
+        mock_extractor_inst.extract_from_content.side_effect = [
+            [{"document_id": "doc1", "int": "1"}, {"document_id": "doc1", "int": "2"}],
+            [],
+        ]
+
+        # Batch side: doc1 has 1 row, doc2 has 1 row (Total 2)
+        # Global match (2 vs 2), but Doc-Level mismatch!
+        mock_extractor_inst.run.return_value = pd.DataFrame(
+            [{"document_id": "doc1", "int": "A"}, {"document_id": "doc2", "int": "B"}]
+        )
+
+        mock_read_parquet.return_value = self._get_mock_df()
+
+        with patch("main.GroupsScraper"), patch("main.DeputiesScraper"), patch(
+            "main.SubstitutionsEnricher",
+            return_value=MagicMock(enrich=MagicMock(return_value=(pd.DataFrame(), pd.DataFrame()))),
+        ), patch("main.run_interventions_enrichment"), patch("pathlib.Path.mkdir"), patch(
+            "pathlib.Path.exists", return_value=True
+        ), patch("builtins.open", mock_open()):
+            main.main()
+
+    @patch("main.SessionsScraper")
     @patch("main.pd.read_parquet")
     @patch("main.argparse.ArgumentParser.parse_args")
     def test_main_with_no_new_files(
