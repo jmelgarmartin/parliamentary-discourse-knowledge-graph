@@ -50,6 +50,7 @@ class TestMainStreaming(unittest.TestCase):
             log_level="INFO",
             headless=True,
             experimental_streaming=True,
+            use_streaming_candidate=False,
         )
 
         # Mock scraper to return dummy data and trigger callback via side_effect
@@ -119,6 +120,7 @@ class TestMainStreaming(unittest.TestCase):
             log_level="INFO",
             headless=True,
             experimental_streaming=True,
+            use_streaming_candidate=False,
         )
 
         # Triggers callback
@@ -174,6 +176,7 @@ class TestMainStreaming(unittest.TestCase):
             log_level="INFO",
             headless=True,
             experimental_streaming=True,
+            use_streaming_candidate=False,
         )
 
         mock_scraper_inst = mock_scraper.return_value
@@ -208,6 +211,162 @@ class TestMainStreaming(unittest.TestCase):
     @patch("main.pd.read_parquet")
     @patch("main.pd.DataFrame.to_parquet")
     @patch("main.argparse.ArgumentParser.parse_args")
+    @patch("main.run_interventions_enrichment")
+    def test_main_uses_batch_by_default(
+        self,
+        mock_run_enrich: MagicMock,
+        mock_args: MagicMock,
+        mock_to_parquet: MagicMock,
+        mock_read_parquet: MagicMock,
+        mock_extractor: MagicMock,
+        mock_scraper: MagicMock,
+    ) -> None:
+        """Verify that without --use-streaming-candidate, the pipeline uses the batch path."""
+        mock_args.return_value = MagicMock(
+            term="15",
+            driver_path=None,
+            state_path="state/bronze.duckdb",
+            log_level="INFO",
+            headless=True,
+            experimental_streaming=True,
+            use_streaming_candidate=False,
+        )
+
+        mock_scraper_inst = mock_scraper.return_value
+        mock_scraper_inst.run.side_effect = lambda *a, **kw: (kw.get("content_callback")("d1", "h"), ["f1"])
+
+        mock_extractor_inst = mock_extractor.return_value
+        mock_extractor_inst.run.return_value = pd.DataFrame(
+            [{"document_id": "d1", "intervention_order": 0, "intervention_id": "id1"}]
+        )
+        mock_extractor_inst.extract_from_content.return_value = [
+            {"document_id": "d1", "intervention_order": 0, "intervention_id": "id1"}
+        ]
+
+        mock_read_parquet.return_value = self._get_mock_df()
+
+        with patch("main.setup_logging"), patch("main.BackupManager"), patch("main.GroupsScraper"), patch(
+            "main.DeputiesScraper"
+        ), patch(
+            "main.SubstitutionsEnricher",
+            return_value=MagicMock(enrich=MagicMock(return_value=(pd.DataFrame(), pd.DataFrame()))),
+        ), patch("pathlib.Path.mkdir"), patch("pathlib.Path.exists", return_value=True), patch(
+            "builtins.open", mock_open()
+        ):
+            main.main()
+
+            expected_batch_path = "data/silver/interventions/legislature=15/interventions_raw.parquet"
+            mock_run_enrich.assert_called_once_with("15", expected_batch_path, None)
+
+    @patch("main.SessionsScraper")
+    @patch("main.InterventionsExtractor")
+    @patch("main.pd.read_parquet")
+    @patch("main.pd.DataFrame.to_parquet")
+    @patch("main.argparse.ArgumentParser.parse_args")
+    @patch("main.run_interventions_enrichment")
+    def test_main_uses_streaming_candidate_when_validation_matches(
+        self,
+        mock_run_enrich: MagicMock,
+        mock_args: MagicMock,
+        mock_to_parquet: MagicMock,
+        mock_read_parquet: MagicMock,
+        mock_extractor: MagicMock,
+        mock_scraper: MagicMock,
+    ) -> None:
+        """Verify that with matching validation, the candidate source is selected."""
+        mock_args.return_value = MagicMock(
+            term="15",
+            driver_path=None,
+            state_path="state/bronze.duckdb",
+            log_level="INFO",
+            headless=True,
+            experimental_streaming=True,
+            use_streaming_candidate=True,
+        )
+
+        mock_scraper_inst = mock_scraper.return_value
+        mock_scraper_inst.run.side_effect = lambda *a, **kw: (kw.get("content_callback")("d1", "h"), ["f1"])
+
+        data = [{"document_id": "d1", "intervention_order": 0, "intervention_id": "id1"}]
+        mock_extractor_inst = mock_extractor.return_value
+        mock_extractor_inst.run.return_value = pd.DataFrame(data)
+        mock_extractor_inst.extract_from_content.return_value = data
+
+        mock_read_parquet.return_value = self._get_mock_df()
+
+        with patch("main.setup_logging"), patch("main.BackupManager"), patch("main.GroupsScraper"), patch(
+            "main.DeputiesScraper"
+        ), patch(
+            "main.SubstitutionsEnricher",
+            return_value=MagicMock(enrich=MagicMock(return_value=(pd.DataFrame(), pd.DataFrame()))),
+        ), patch("pathlib.Path.mkdir"), patch("pathlib.Path.exists", return_value=True), patch(
+            "builtins.open", mock_open()
+        ):
+            main.main()
+
+            expected_candidate_path = "data/validation/legislature=15/interventions_streaming_candidate.parquet"
+            mock_run_enrich.assert_called_once_with("15", expected_candidate_path, None)
+
+    @patch("main.SessionsScraper")
+    @patch("main.InterventionsExtractor")
+    @patch("main.pd.read_parquet")
+    @patch("main.pd.DataFrame.to_parquet")
+    @patch("main.argparse.ArgumentParser.parse_args")
+    @patch("main.run_interventions_enrichment")
+    def test_main_falls_back_to_batch_when_validation_fails(
+        self,
+        mock_run_enrich: MagicMock,
+        mock_args: MagicMock,
+        mock_to_parquet: MagicMock,
+        mock_read_parquet: MagicMock,
+        mock_extractor: MagicMock,
+        mock_scraper: MagicMock,
+    ) -> None:
+        """Verify that fallback to batch occurs if validation fails, even with the switch flag."""
+        mock_args.return_value = MagicMock(
+            term="15",
+            driver_path=None,
+            state_path="state/bronze.duckdb",
+            log_level="INFO",
+            headless=True,
+            experimental_streaming=True,
+            use_streaming_candidate=True,
+        )
+
+        mock_scraper_inst = mock_scraper.return_value
+        mock_scraper_inst.run.side_effect = lambda *a, **kw: (kw.get("content_callback")("d1", "h"), ["f1"])
+
+        mock_extractor_inst = mock_extractor.return_value
+        # Streaming has id_stream
+        mock_extractor_inst.extract_from_content.return_value = [
+            {"document_id": "d1", "intervention_order": 0, "intervention_id": "id_stream"}
+        ]
+        # Batch has id_batch (MISMATCH!)
+        mock_extractor_inst.run.return_value = pd.DataFrame(
+            [{"document_id": "d1", "intervention_order": 0, "intervention_id": "id_batch"}]
+        )
+
+        mock_read_parquet.return_value = self._get_mock_df()
+
+        with patch("main.setup_logging"), patch("main.BackupManager"), patch("main.GroupsScraper"), patch(
+            "main.DeputiesScraper"
+        ), patch(
+            "main.SubstitutionsEnricher",
+            return_value=MagicMock(enrich=MagicMock(return_value=(pd.DataFrame(), pd.DataFrame()))),
+        ), patch("pathlib.Path.mkdir"), patch("pathlib.Path.exists", return_value=True), patch(
+            "builtins.open", mock_open()
+        ):
+            main.main()
+
+            expected_batch_path = "data/silver/interventions/legislature=15/interventions_raw.parquet"
+            # Should have fallen back to batch because row_level_parity is MISMATCH
+            mock_run_enrich.assert_called_once_with("15", expected_batch_path, None)
+
+    @patch("main.SessionsScraper")
+    @patch("main.InterventionsExtractor")
+    @patch("main.pd.read_parquet")
+    @patch("main.pd.DataFrame.to_parquet")
+    @patch("main.argparse.ArgumentParser.parse_args")
     @patch("main.setup_logging")
     @patch("main.BackupManager")
     def test_main_with_row_level_match(
@@ -228,6 +387,7 @@ class TestMainStreaming(unittest.TestCase):
             log_level="INFO",
             headless=True,
             experimental_streaming=True,
+            use_streaming_candidate=False,
         )
 
         mock_scraper_inst = mock_scraper.return_value
@@ -283,6 +443,7 @@ class TestMainStreaming(unittest.TestCase):
             log_level="INFO",
             headless=True,
             experimental_streaming=True,
+            use_streaming_candidate=False,
         )
 
         mock_scraper_inst = mock_scraper.return_value
@@ -340,6 +501,7 @@ class TestMainStreaming(unittest.TestCase):
             log_level="INFO",
             headless=True,
             experimental_streaming=True,
+            use_streaming_candidate=False,
         )
 
         mock_scraper_inst = mock_scraper.return_value
@@ -410,6 +572,7 @@ class TestMainStreaming(unittest.TestCase):
             log_level="INFO",
             headless=True,
             experimental_streaming=True,
+            use_streaming_candidate=False,
         )
 
         # Scraper triggers callback for TWO documents
@@ -469,6 +632,7 @@ class TestMainStreaming(unittest.TestCase):
             log_level="INFO",
             headless=True,
             experimental_streaming=True,
+            use_streaming_candidate=False,
         )
         mock_scraper_inst = mock_scraper.return_value
         mock_scraper_inst.run.return_value = (MagicMock(), [])
@@ -498,6 +662,7 @@ class TestMainStreaming(unittest.TestCase):
             log_level="INFO",
             headless=True,
             experimental_streaming=False,
+            use_streaming_candidate=False,
         )
         mock_read_parquet.return_value = self._get_mock_df()
         mock_scraper_inst = mock_scraper.return_value

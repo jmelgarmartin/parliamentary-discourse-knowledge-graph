@@ -64,9 +64,12 @@ def main() -> None:
         "--no-headless", action="store_false", dest="headless", help="Run browser in non-headless mode (visible GUI)"
     )
     parser.add_argument(
-        "--experimental-streaming",
+        "--experimental-streaming", action="store_true", help="Enable experimental in-memory streaming extraction"
+    )
+    parser.add_argument(
+        "--use-streaming-candidate",
         action="store_true",
-        help="Enable experimental in-memory extraction during scraping for validation purposes.",
+        help="Use the streaming candidate as the downstream source if validation matches",
     )
     args = parser.parse_args()
 
@@ -235,15 +238,12 @@ def main() -> None:
         logger.info("No new session files detected. Skipping interventions extraction.")
     t1_ext = time.time()
 
-    # 6. Interventions Enrichment (Silver Layer)
-    logger.info(">>> phase 6: interventions_enrichment (Silver Layer)")
-    t0_int_enrich = time.time()
-    if new_files:
-        logger.info("New data detected. Starting interventions enrichment...")
-        run_interventions_enrichment(args.term, None, None)
-    else:
-        logger.info("No new data to enrich. Skipping.")
-    t1_int_enrich = time.time()
+    t1_ext = time.time()
+
+    # Default parity statuses for downstream selection
+    parity_status = "MATCH"
+    doc_level_parity = "MATCH"
+    row_level_parity = "MATCH"
 
     # --- PHASE 7: Experimental Streaming Validation ---
     if args.experimental_streaming:
@@ -255,9 +255,6 @@ def main() -> None:
 
         streaming_count = 0
         batch_subset_count = 0
-        parity_status = "MATCH"
-        doc_level_parity = "MATCH"
-        row_level_parity = "MATCH"
         mismatched_docs = []
         docs_compared = 0
         skip_reason = None
@@ -365,6 +362,41 @@ def main() -> None:
                 f"Mismatched docs: {len(mismatched_docs)}. "
                 f"Diagnostics available in {report_file}"
             )
+
+    # 6. Interventions Enrichment (Silver Layer)
+    logger.info(">>> phase 6: interventions_enrichment (Silver Layer)")
+    t0_int_enrich = time.time()
+    if new_files:
+        logger.info("New data detected. Starting interventions enrichment...")
+
+        # Guarded source selection
+        batch_raw_path = f"data/silver/interventions/legislature={args.term}/interventions_raw.parquet"
+        selected_source = batch_raw_path
+
+        if args.use_streaming_candidate:
+            all_match = parity_status == "MATCH" and doc_level_parity == "MATCH" and row_level_parity == "MATCH"
+            if all_match:
+                candidate_path = f"data/validation/legislature={args.term}/interventions_streaming_candidate.parquet"
+                if pathlib.Path(candidate_path).exists():
+                    selected_source = candidate_path
+                    logger.info(
+                        f"--use-streaming-candidate enabled and parity matched. "
+                        f"Switching downstream source to: {selected_source}"
+                    )
+                else:
+                    logger.warning(
+                        f"--use-streaming-candidate enabled and parity matched, "
+                        f"but candidate file not found at {candidate_path}. Falling back to batch."
+                    )
+            else:
+                logger.warning(
+                    "--use-streaming-candidate enabled but validation failed. " "Falling back to official batch source."
+                )
+
+        run_interventions_enrichment(args.term, selected_source, None)
+    else:
+        logger.info("No new data to enrich. Skipping.")
+    t1_int_enrich = time.time()
 
     logger.info("=========================================")
     logger.info("EXECUTION METRICS SUMMARY")
