@@ -274,6 +274,7 @@ def main() -> None:
     doc_level_parity = "NOT_RUN"
     row_level_parity = "NOT_RUN"
     confidence_metrics = {}
+    fallback_reason: Optional[str] = None
 
     # --- PHASE 7: Experimental Streaming Validation ---
     if args.experimental_streaming:
@@ -390,21 +391,24 @@ def main() -> None:
                     selected_source = str(streaming_candidate_path)
                     logger.info("Streaming candidate source selected | policy=strict_match | status=MATCH")
                 else:
+                    fallback_reason = "strict_match_failed"
                     logger.info(
-                        "Falling back to official batch source | policy=strict_match | reason=strict_match_failed"
+                        f"Falling back to official batch source | policy=strict_match | reason={fallback_reason}"
                     )
             else:
                 selection_policy = "confidence_threshold"
                 threshold = args.streaming_confidence_threshold
                 if confidence_level == "SKIPPED":
+                    fallback_reason = "validation_skipped"
                     logger.info(
-                        "Falling back to official batch source | policy=confidence_threshold"
-                        " | reason=validation_skipped"
+                        "Falling back to official batch source | "
+                        f"policy=confidence_threshold | reason={fallback_reason}"
                     )
                 elif not streaming_candidate_path.exists():
+                    fallback_reason = "candidate_missing"
                     logger.info(
-                        "Falling back to official batch source | policy=confidence_threshold"
-                        " | reason=candidate_missing"
+                        "Falling back to official batch source | "
+                        f"policy=confidence_threshold | reason={fallback_reason}"
                     )
                 elif confidence_score >= threshold:
                     selected_source = str(streaming_candidate_path)
@@ -413,10 +417,11 @@ def main() -> None:
                         f" | confidence={confidence_score:.4f} >= threshold={threshold:.4f}"
                     )
                 else:
+                    fallback_reason = "confidence_below_threshold"
                     logger.info(
                         f"Falling back to official batch source | policy=confidence_threshold"
                         f" | confidence={confidence_score:.4f} < threshold={threshold:.4f}"
-                        f" | reason=confidence_below_threshold"
+                        f" | reason={fallback_reason}"
                     )
         else:
             selection_policy = "batch_only"
@@ -449,6 +454,37 @@ def main() -> None:
         with open(report_file, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=4)
 
+        # --- Phase 14: Operational Summary & History ---
+        summary = {
+            "term": args.term,
+            "execution_mode": "experimental_streaming",
+            "selection_policy": selection_policy,
+            "candidate_selected": bool(selected_source),
+            "selected_source": "streaming_candidate_source" if selected_source else "official_batch_source",
+            "parity_status": parity_status,
+            "document_level_parity": doc_level_parity,
+            "row_level_parity": row_level_parity,
+            "confidence_score": confidence_metrics.get("confidence_score", 0.0),
+            "confidence_level": confidence_metrics.get("confidence_level", "SKIPPED"),
+            "docs_compared": docs_compared,
+            "mismatched_document_count": len(mismatched_docs),
+            "fallback_reason": fallback_reason,
+            "timestamp": pd.Timestamp.now().isoformat(),
+        }
+
+        summary_file = val_dir / "validation_run_summary.json"
+        with open(summary_file, "w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=4)
+
+        # Best-effort append-only history log
+        try:
+            history_file = pathlib.Path("data/validation/validation_run_history.jsonl")
+            history_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(history_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(summary) + "\n")
+        except Exception as e:
+            logger.warning(f"Failed to append validation run history: {e}")
+
         if parity_status == "SKIPPED":
             logger.info(f"Parity report: SKIPPED ({skip_reason}). Report saved to {report_file}")
             logger.info(f"Validation summary: SKIPPED | reason={skip_reason}")
@@ -459,6 +495,19 @@ def main() -> None:
                 f" | docs={docs_compared - len(mismatched_docs)}/{docs_compared}"
                 f" | rows={matched_rows_count}/{total_rows_union_count}"
             )
+
+        # Concise operational summary log
+        policy_str = (
+            f"{selection_policy}({args.streaming_confidence_threshold})"
+            if selection_policy == "confidence_threshold"
+            else selection_policy
+        )
+        source_label = "streaming_candidate_source" if selected_source else "official_batch_source"
+        logger.info(
+            f"Streaming validation run summary | policy={policy_str}"
+            f" | selected={source_label} | confidence={confidence_score:.4f}"
+            f" | docs={docs_compared} | mismatches={len(mismatched_docs)}"
+        )
     else:
         logger.info("Using official batch source | policy=batch_only")
 

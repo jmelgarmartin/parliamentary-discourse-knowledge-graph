@@ -1,7 +1,8 @@
+import argparse
 import os
 import sys
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 import pandas as pd
 
@@ -71,7 +72,7 @@ class TestMainStreaming(unittest.TestCase):
         ), patch("pathlib.Path.mkdir"), patch("pathlib.Path.exists", return_value=True), patch("builtins.open"):
             main.main()
 
-            report = mock_json_dump.call_args[0][0]
+            report = mock_json_dump.call_args_list[0][0][0]
             self.assertEqual(report["confidence_level"], "FULL_MATCH")
             self.assertEqual(report["confidence_score"], 1.0)
 
@@ -121,7 +122,7 @@ class TestMainStreaming(unittest.TestCase):
         ), patch("pathlib.Path.mkdir"), patch("pathlib.Path.exists", return_value=True), patch("builtins.open"):
             main.main()
 
-            report = mock_json_dump.call_args[0][0]
+            report = mock_json_dump.call_args_list[0][0][0]
             self.assertIn(report["confidence_level"], ["HIGH_CONFIDENCE", "PARTIAL_MATCH", "LOW_CONFIDENCE"])
             self.assertLess(report["confidence_score"], 1.0)
 
@@ -154,7 +155,7 @@ class TestMainStreaming(unittest.TestCase):
         ), patch("pathlib.Path.mkdir"), patch("pathlib.Path.exists", return_value=True), patch("builtins.open"):
             main.main()
 
-            report = mock_json_dump.call_args[0][0]
+            report = mock_json_dump.call_args_list[0][0][0]
             self.assertEqual(report["confidence_level"], "SKIPPED")
             self.assertEqual(report["confidence_score"], 0.0)
 
@@ -212,7 +213,7 @@ class TestMainStreaming(unittest.TestCase):
             expected_batch = os.path.normpath("data/silver/interventions/legislature=15/interventions_raw.parquet")
             mock_run_enrich.assert_called_once_with("15", expected_batch, None)
 
-            report = mock_json_dump.call_args[0][0]
+            report = mock_json_dump.call_args_list[0][0][0]
             self.assertEqual(report["selected_source"], "OFFICIAL_BATCH")
 
     @patch("main.SessionsScraper")
@@ -265,7 +266,7 @@ class TestMainStreaming(unittest.TestCase):
             )
             mock_run_enrich.assert_called_once_with("15", expected_candidate, None)
 
-            report = mock_json_dump.call_args[0][0]
+            report = mock_json_dump.call_args_list[0][0][0]
             self.assertEqual(report["policy_used"], "confidence_threshold")
             self.assertIn("interventions_streaming_candidate", report["selected_source"])
 
@@ -380,6 +381,196 @@ class TestMainStreaming(unittest.TestCase):
             main.main()
             expected_batch = os.path.normpath("data/silver/interventions/legislature=15/interventions_raw.parquet")
             mock_run_enrich.assert_called_once_with("15", expected_batch, None)
+
+    @patch("main.BackupManager")
+    @patch("main.GroupsScraper")
+    @patch("main.DeputiesScraper")
+    @patch("main.SubstitutionsEnricher")
+    @patch("main.run_interventions_enrichment")
+    @patch("main.argparse.ArgumentParser.parse_args")
+    @patch("main.pd.read_parquet")
+    @patch("main.pd.DataFrame.to_parquet")
+    @patch("main.InterventionsExtractor")
+    @patch("main.SessionsScraper")
+    @patch("json.dump")
+    @patch("builtins.open", new_callable=mock_open)
+    def test_main_persists_validation_run_summary(
+        self,
+        mock_file: MagicMock,
+        mock_json_dump: MagicMock,
+        mock_sessions_scraper: MagicMock,
+        mock_extractor: MagicMock,
+        mock_to_parquet: MagicMock,
+        mock_read_parquet: MagicMock,
+        mock_parse_args: MagicMock,
+        mock_run_enrich: MagicMock,
+        mock_subst_enricher: MagicMock,
+        mock_deputies_scraper: MagicMock,
+        mock_groups_scraper: MagicMock,
+        mock_backup_manager: MagicMock,
+    ) -> None:
+        """Verify that validation_run_summary.json is persisted with correct fields."""
+        mock_parse_args.return_value = argparse.Namespace(
+            term="15",
+            driver_path=None,
+            state_path="state/bronze.duckdb",
+            log_level="INFO",
+            headless=True,
+            experimental_streaming=True,
+            use_streaming_candidate=False,
+            streaming_confidence_threshold=None,
+        )
+
+        mock_s_instance = mock_sessions_scraper.return_value
+        mock_sessions_df = pd.DataFrame({"document_id": ["doc1"]})
+        mock_s_instance.run.side_effect = lambda content_callback=None: (
+            (content_callback("doc1", "<html></html>") if content_callback else None)
+            or (mock_sessions_df, ["doc1.html"])
+        )
+
+        mock_extractor.return_value.extract_from_content.return_value = [
+            {"document_id": "doc1", "intervention_id": "int1", "intervention_order": 1}
+        ]
+        mock_extractor.return_value.run.return_value = pd.DataFrame(
+            {"document_id": ["doc1"], "intervention_id": ["int1"], "intervention_order": [1]}
+        )
+        mock_subst_enricher.return_value = self._get_enricher_mock()
+
+        with patch("pathlib.Path.exists", return_value=True), patch("pathlib.Path.mkdir"), patch("main.setup_logging"):
+            main.main()
+
+        # Check if validation_run_summary.json was written (it's the second call to json.dump)
+        self.assertTrue(mock_json_dump.call_count >= 2, "json.dump should be called at least twice")
+        summary = mock_json_dump.call_args_list[1][0][0]
+        self.assertEqual(summary["execution_mode"], "experimental_streaming")
+        self.assertEqual(summary["term"], "15")
+
+    @patch("main.BackupManager")
+    @patch("main.GroupsScraper")
+    @patch("main.DeputiesScraper")
+    @patch("main.SubstitutionsEnricher")
+    @patch("main.run_interventions_enrichment")
+    @patch("main.argparse.ArgumentParser.parse_args")
+    @patch("main.pd.read_parquet")
+    @patch("main.pd.DataFrame.to_parquet")
+    @patch("main.InterventionsExtractor")
+    @patch("main.SessionsScraper")
+    @patch("json.dump")
+    @patch("builtins.open", new_callable=mock_open)
+    def test_main_records_selected_source_in_summary(
+        self,
+        mock_file: MagicMock,
+        mock_json_dump: MagicMock,
+        mock_sessions_scraper: MagicMock,
+        mock_extractor: MagicMock,
+        mock_to_parquet: MagicMock,
+        mock_read_parquet: MagicMock,
+        mock_parse_args: MagicMock,
+        mock_run_enrich: MagicMock,
+        mock_subst_enricher: MagicMock,
+        mock_deputies_scraper: MagicMock,
+        mock_groups_scraper: MagicMock,
+        mock_backup_manager: MagicMock,
+    ) -> None:
+        """Verify that selected_source is correctly recorded in the summary."""
+        mock_parse_args.return_value = argparse.Namespace(
+            term="15",
+            driver_path=None,
+            state_path="state/bronze.duckdb",
+            log_level="INFO",
+            headless=True,
+            experimental_streaming=True,
+            use_streaming_candidate=True,
+            streaming_confidence_threshold=0.9,
+        )
+
+        mock_s_instance = mock_sessions_scraper.return_value
+        mock_sessions_df = pd.DataFrame({"document_id": ["doc1"]})
+        mock_s_instance.run.side_effect = lambda content_callback=None: (
+            (content_callback("doc1", "<html></html>") if content_callback else None)
+            or (mock_sessions_df, ["doc1.html"])
+        )
+
+        mock_extractor.return_value.extract_from_content.return_value = [
+            {"document_id": "doc1", "intervention_id": "int1", "intervention_order": 1}
+        ]
+        mock_extractor.return_value.run.return_value = pd.DataFrame(
+            {"document_id": ["doc1"], "intervention_id": ["int1"], "intervention_order": [1]}
+        )
+        mock_subst_enricher.return_value = self._get_enricher_mock()
+
+        with patch("pathlib.Path.exists", return_value=True), patch("pathlib.Path.mkdir"), patch("main.setup_logging"):
+            main.main()
+
+        summary = mock_json_dump.call_args_list[1][0][0]
+        self.assertEqual(summary["selected_source"], "streaming_candidate_source")
+        self.assertEqual(summary["selection_policy"], "confidence_threshold")
+
+    @patch("main.BackupManager")
+    @patch("main.GroupsScraper")
+    @patch("main.DeputiesScraper")
+    @patch("main.SubstitutionsEnricher")
+    @patch("main.run_interventions_enrichment")
+    @patch("main.argparse.ArgumentParser.parse_args")
+    @patch("main.pd.read_parquet")
+    @patch("main.pd.DataFrame.to_parquet")
+    @patch("main.InterventionsExtractor")
+    @patch("main.SessionsScraper")
+    @patch("json.dump")
+    @patch("builtins.open", new_callable=mock_open)
+    def test_main_appends_validation_run_history(
+        self,
+        mock_file: MagicMock,
+        mock_json_dump: MagicMock,
+        mock_sessions_scraper: MagicMock,
+        mock_extractor: MagicMock,
+        mock_to_parquet: MagicMock,
+        mock_read_parquet: MagicMock,
+        mock_parse_args: MagicMock,
+        mock_run_enrich: MagicMock,
+        mock_subst_enricher: MagicMock,
+        mock_deputies_scraper: MagicMock,
+        mock_groups_scraper: MagicMock,
+        mock_backup_manager: MagicMock,
+    ) -> None:
+        """Verify that one compact record is appended to the history log."""
+        mock_parse_args.return_value = argparse.Namespace(
+            term="15",
+            driver_path=None,
+            state_path="state/bronze.duckdb",
+            log_level="INFO",
+            headless=True,
+            experimental_streaming=True,
+            use_streaming_candidate=False,
+            streaming_confidence_threshold=None,
+        )
+
+        mock_s_instance = mock_sessions_scraper.return_value
+        mock_sessions_df = pd.DataFrame({"document_id": ["doc1"]})
+        mock_s_instance.run.side_effect = lambda content_callback=None: (
+            (content_callback("doc1", "<html></html>") if content_callback else None)
+            or (mock_sessions_df, ["doc1.html"])
+        )
+
+        mock_extractor.return_value.extract_from_content.return_value = [
+            {"document_id": "doc1", "intervention_id": "int1", "intervention_order": 1}
+        ]
+        mock_extractor.return_value.run.return_value = pd.DataFrame(
+            {"document_id": ["doc1"], "intervention_id": ["int1"], "intervention_order": [1]}
+        )
+        mock_subst_enricher.return_value = self._get_enricher_mock()
+
+        with patch("pathlib.Path.exists", return_value=True), patch("pathlib.Path.mkdir"), patch("main.setup_logging"):
+            main.main()
+
+        # Check for history log 'a' (append) mode. jsonl uses f.write()
+        expected_history_path = os.path.normpath("data/validation/validation_run_history.jsonl")
+        history_calls = [
+            c
+            for c in mock_file.call_args_list
+            if os.path.normpath(str(c.args[0])) == expected_history_path and c.args[1] == "a"
+        ]
+        self.assertTrue(len(history_calls) > 0, "History file should be opened for appending")
 
 
 if __name__ == "__main__":

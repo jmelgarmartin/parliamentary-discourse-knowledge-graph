@@ -119,6 +119,10 @@ The project includes an experimental in-memory extraction pipeline that runs con
 ### Generated Artifacts
 - **Parity Report**: `data/validation/legislature={term}/parity_report.json`
   - Contains global, document, and row-level parity statuses + confidence metrics.
+- **Validation Run Summary**: `data/validation/legislature={term}/validation_run_summary.json`
+  - A compact, operator-focused summary of the individual run and the resulting source selection decision.
+- **Validation Run History**: `data/validation/validation_run_history.jsonl`
+  - An append-only log of all streaming validation runs, used for longitudinal analysis of confidence and parity trends.
 - **Streaming Candidate**: `data/validation/legislature={term}/interventions_streaming_candidate.parquet`
   - The dataset produced by the experimental pipeline.
 
