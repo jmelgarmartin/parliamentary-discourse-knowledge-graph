@@ -66,10 +66,10 @@ class TestMainStreaming(unittest.TestCase):
         # Mock extractor to return a matching document_id for parity check
         mock_extractor_inst = mock_extractor.return_value
         mock_extractor_inst.extract_from_content.return_value = [
-            {"document_id": "doc1", "intervention": "test", "intervention_id": "id1"}
+            {"document_id": "doc1", "intervention": "test", "intervention_id": "id1", "intervention_order": 0}
         ]
         mock_extractor_inst.run.return_value = pd.DataFrame(
-            [{"document_id": "doc1", "intervention": "test", "intervention_id": "id1"}]
+            [{"document_id": "doc1", "intervention": "test", "intervention_id": "id1", "intervention_order": 0}]
         )
 
         # Mock read_parquet to return robust DataFrames for all phases
@@ -97,6 +97,111 @@ class TestMainStreaming(unittest.TestCase):
             mock_extractor_inst.extract_from_content.assert_called_once_with(
                 "<html>content</html>", "doc1", "doc1.html"
             )
+
+    @patch("main.SessionsScraper")
+    @patch("main.InterventionsExtractor")
+    @patch("main.pd.read_parquet")
+    @patch("main.pd.DataFrame.to_parquet")
+    @patch("main.argparse.ArgumentParser.parse_args")
+    def test_main_persists_streaming_candidate_output(
+        self,
+        mock_args: MagicMock,
+        mock_to_parquet: MagicMock,
+        mock_read_parquet: MagicMock,
+        mock_extractor: MagicMock,
+        mock_scraper: MagicMock,
+    ) -> None:
+        """Verify that interventions_streaming_candidate.parquet is persisted when records exist."""
+        mock_args.return_value = MagicMock(
+            term="15",
+            driver_path=None,
+            state_path="state/bronze.duckdb",
+            log_level="INFO",
+            headless=True,
+            experimental_streaming=True,
+        )
+
+        # Triggers callback
+        mock_scraper_inst = mock_scraper.return_value
+        mock_scraper_inst.run.side_effect = lambda *a, **kw: (kw.get("content_callback")("d1", "h"), ["f1"])
+
+        mock_extractor_inst = mock_extractor.return_value
+        mock_extractor_inst.extract_from_content.return_value = [
+            {"document_id": "d1", "intervention_order": 0, "intervention_id": "id1"}
+        ]
+        mock_extractor_inst.run.return_value = pd.DataFrame(
+            [{"document_id": "d1", "intervention_order": 0, "intervention_id": "id1"}]
+        )
+
+        mock_read_parquet.return_value = self._get_mock_df()
+
+        with patch("main.setup_logging"), patch("main.BackupManager"), patch("main.GroupsScraper"), patch(
+            "main.DeputiesScraper"
+        ), patch(
+            "main.SubstitutionsEnricher",
+            return_value=MagicMock(enrich=MagicMock(return_value=(pd.DataFrame(), pd.DataFrame()))),
+        ), patch("main.run_interventions_enrichment"), patch("pathlib.Path.mkdir"), patch(
+            "pathlib.Path.exists", return_value=True
+        ), patch("builtins.open", mock_open()):
+            main.main()
+
+            # Verify specifically that the candidate filename was used
+            candidate_calls = [
+                call
+                for call in mock_to_parquet.call_args_list
+                if "interventions_streaming_candidate.parquet" in str(call[0][0])
+            ]
+            self.assertTrue(len(candidate_calls) > 0, "Candidate parquet was not persisted.")
+
+    @patch("main.SessionsScraper")
+    @patch("main.InterventionsExtractor")
+    @patch("main.pd.read_parquet")
+    @patch("main.pd.DataFrame.to_parquet")
+    @patch("main.argparse.ArgumentParser.parse_args")
+    def test_main_does_not_persist_candidate_when_no_streaming_records(
+        self,
+        mock_args: MagicMock,
+        mock_to_parquet: MagicMock,
+        mock_read_parquet: MagicMock,
+        mock_extractor: MagicMock,
+        mock_scraper: MagicMock,
+    ) -> None:
+        """Verify that candidate parquet is NOT persisted if no records are collected."""
+        mock_args.return_value = MagicMock(
+            term="15",
+            driver_path=None,
+            state_path="state/bronze.duckdb",
+            log_level="INFO",
+            headless=True,
+            experimental_streaming=True,
+        )
+
+        mock_scraper_inst = mock_scraper.return_value
+        mock_scraper_inst.run.return_value = (MagicMock(), ["f1"])  # No callback
+
+        mock_extractor_inst = mock_extractor.return_value
+        mock_extractor_inst.run.return_value = pd.DataFrame(
+            [{"document_id": "d1", "intervention_order": 0, "intervention_id": "id1"}]
+        )
+
+        mock_read_parquet.return_value = self._get_mock_df()
+
+        with patch("main.setup_logging"), patch("main.BackupManager"), patch("main.GroupsScraper"), patch(
+            "main.DeputiesScraper"
+        ), patch(
+            "main.SubstitutionsEnricher",
+            return_value=MagicMock(enrich=MagicMock(return_value=(pd.DataFrame(), pd.DataFrame()))),
+        ), patch("main.run_interventions_enrichment"), patch("pathlib.Path.mkdir"), patch(
+            "pathlib.Path.exists", return_value=True
+        ), patch("builtins.open", mock_open()):
+            main.main()
+
+            candidate_calls = [
+                call
+                for call in mock_to_parquet.call_args_list
+                if "interventions_streaming_candidate.parquet" in str(call[0][0])
+            ]
+            self.assertEqual(len(candidate_calls), 0, "Candidate parquet was persisted unexpectedly.")
 
     @patch("main.SessionsScraper")
     @patch("main.InterventionsExtractor")
@@ -137,10 +242,10 @@ class TestMainStreaming(unittest.TestCase):
 
         mock_extractor_inst = mock_extractor.return_value
         mock_extractor_inst.extract_from_content.return_value = [
-            {"document_id": "doc1", "intervention": "A", "intervention_id": "idA"}
+            {"document_id": "doc1", "intervention": "A", "intervention_id": "idA", "intervention_order": 0}
         ]
         mock_extractor_inst.run.return_value = pd.DataFrame(
-            [{"document_id": "doc1", "intervention": "A", "intervention_id": "idA"}]
+            [{"document_id": "doc1", "intervention": "A", "intervention_id": "idA", "intervention_order": 0}]
         )
 
         mock_read_parquet.return_value = self._get_mock_df()
@@ -193,11 +298,11 @@ class TestMainStreaming(unittest.TestCase):
         mock_extractor_inst = mock_extractor.return_value
         # Streaming has idA
         mock_extractor_inst.extract_from_content.return_value = [
-            {"document_id": "doc1", "intervention": "A", "intervention_id": "idA"}
+            {"document_id": "doc1", "intervention": "A", "intervention_id": "idA", "intervention_order": 0}
         ]
         # Batch has idB (different content/identity, same count)
         mock_extractor_inst.run.return_value = pd.DataFrame(
-            [{"document_id": "doc1", "intervention": "B", "intervention_id": "idB"}]
+            [{"document_id": "doc1", "intervention": "B", "intervention_id": "idB", "intervention_order": 0}]
         )
 
         mock_read_parquet.return_value = self._get_mock_df()
@@ -252,25 +357,27 @@ class TestMainStreaming(unittest.TestCase):
         # docB: Streaming extra 1 row (Batch=1, Stream=2)
         mock_extractor_inst = mock_extractor.return_value
         mock_extractor_inst.extract_from_content.side_effect = [
-            [{"document_id": "docA", "int": "1", "intervention_id": "idA1"}],  # Stream A (1)
+            [{"document_id": "docA", "intervention_order": 0, "intervention_id": "idA1"}],  # Stream A (1)
             [
-                {"document_id": "docB", "int": "1", "intervention_id": "idB1"},
-                {"document_id": "docB", "int": "2", "intervention_id": "idB2"},
+                {"document_id": "docB", "intervention_order": 0, "intervention_id": "idB1"},
+                {"document_id": "docB", "intervention_order": 1, "intervention_id": "idB2"},
             ],  # Stream B (2)
         ]
 
         # Batch results
         mock_extractor_inst.run.return_value = pd.DataFrame(
             [
-                {"document_id": "docA", "int": "A1", "intervention_id": "idA1"},
-                {"document_id": "docA", "int": "A2", "intervention_id": "idA2"},
-                {"document_id": "docB", "int": "B1", "intervention_id": "idB1"},
+                {"document_id": "docA", "intervention_order": 0, "intervention_id": "idA1"},
+                {"document_id": "docA", "intervention_order": 1, "intervention_id": "idA2"},
+                {"document_id": "docB", "intervention_order": 0, "intervention_id": "idB1"},
             ]
         )
 
         mock_read_parquet.return_value = self._get_mock_df()
 
-        with patch("main.GroupsScraper"), patch("main.DeputiesScraper"), patch(
+        with patch("main.setup_logging"), patch("main.BackupManager"), patch("main.GroupsScraper"), patch(
+            "main.DeputiesScraper"
+        ), patch(
             "main.SubstitutionsEnricher",
             return_value=MagicMock(enrich=MagicMock(return_value=(pd.DataFrame(), pd.DataFrame()))),
         ), patch("main.run_interventions_enrichment"), patch("pathlib.Path.mkdir"), patch(
@@ -321,8 +428,8 @@ class TestMainStreaming(unittest.TestCase):
         mock_extractor_inst = mock_extractor.return_value
         mock_extractor_inst.extract_from_content.side_effect = [
             [
-                {"document_id": "doc1", "int": "1", "intervention_id": "id1_1"},
-                {"document_id": "doc1", "int": "2", "intervention_id": "id1_2"},
+                {"document_id": "doc1", "intervention_order": 0, "intervention_id": "id1_1"},
+                {"document_id": "doc1", "intervention_order": 1, "intervention_id": "id1_2"},
             ],
             [],
         ]
@@ -331,14 +438,16 @@ class TestMainStreaming(unittest.TestCase):
         # Global match (2 vs 2), but Doc-Level mismatch!
         mock_extractor_inst.run.return_value = pd.DataFrame(
             [
-                {"document_id": "doc1", "int": "A", "intervention_id": "id1_1"},
-                {"document_id": "doc2", "int": "B", "intervention_id": "id2_1"},
+                {"document_id": "doc1", "intervention_order": 0, "intervention_id": "id1_1"},
+                {"document_id": "doc2", "intervention_order": 0, "intervention_id": "id2_1"},
             ]
         )
 
         mock_read_parquet.return_value = self._get_mock_df()
 
-        with patch("main.GroupsScraper"), patch("main.DeputiesScraper"), patch(
+        with patch("main.setup_logging"), patch("main.BackupManager"), patch("main.GroupsScraper"), patch(
+            "main.DeputiesScraper"
+        ), patch(
             "main.SubstitutionsEnricher",
             return_value=MagicMock(enrich=MagicMock(return_value=(pd.DataFrame(), pd.DataFrame()))),
         ), patch("main.run_interventions_enrichment"), patch("pathlib.Path.mkdir"), patch(

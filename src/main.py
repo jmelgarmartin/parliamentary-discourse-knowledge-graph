@@ -272,7 +272,12 @@ def main() -> None:
             # Persist streaming results (validation only)
             if streaming_records:
                 streaming_df = pd.DataFrame(streaming_records)
-                val_file = val_dir / "interventions_streaming.parquet"
+                # Sort for deterministic candidate artifact (Silver alignment)
+                sort_cols = ["document_id", "intervention_order"]
+                if all(c in streaming_df.columns for c in sort_cols):
+                    streaming_df.sort_values(sort_cols, inplace=True)
+
+                val_file = val_dir / "interventions_streaming_candidate.parquet"
                 streaming_df.to_parquet(val_file, index=False)
                 logger.info(f"Saved {len(streaming_df)} streaming-extracted records to {val_file}")
                 streaming_count = len(streaming_df)
