@@ -2,7 +2,7 @@ import pathlib
 from unittest.mock import MagicMock
 
 import pytest
-from congreso_analisis.silver.interventions_extractor import InterventionsExtractor
+from congress_analysis.silver.interventions_extractor import InterventionsExtractor
 
 
 class MockSoup:
@@ -44,7 +44,7 @@ def test_conservative_segmentation(extractor: InterventionsExtractor, monkeypatc
 
     # Patch BeautifulSoup in the module
     monkeypatch.setattr(
-        "congreso_analisis.silver.interventions_extractor.BeautifulSoup",
+        "congress_analysis.silver.interventions_extractor.BeautifulSoup",
         lambda *args, **kwargs: mock_soup,
     )
     # Patch open to avoid reading real files

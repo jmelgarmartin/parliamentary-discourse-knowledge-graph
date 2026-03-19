@@ -1,7 +1,7 @@
 import re
 from typing import Optional, Tuple
 
-from congreso_analisis.processing.speaker_validation import SpeakerValidator
+from congress_analysis.processing.speaker_validation import SpeakerValidator
 
 
 class SpeakerDetector:

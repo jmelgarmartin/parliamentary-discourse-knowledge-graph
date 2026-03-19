@@ -2,8 +2,8 @@ import logging
 from typing import Any, Dict, List, Optional, Set
 
 import pandas as pd
-from congreso_analisis.processing.filters import is_admin_block, should_keep_for_graph
-from congreso_analisis.processing.roles import SpeakerRole, detect_role_by_regex, normalize_person_name
+from congress_analysis.processing.filters import is_admin_block, should_keep_for_graph
+from congress_analysis.processing.roles import SpeakerRole, detect_role_by_regex, normalize_person_name
 
 logger = logging.getLogger(__name__)
 

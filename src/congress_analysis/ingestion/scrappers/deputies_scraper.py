@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 import duckdb
 import pandas as pd
-from congreso_analisis.utils.selenium_utils import (
+from congress_analysis.utils.selenium_utils import (
     accept_cookies,
     click_next_page,
     click_with_wait,
@@ -280,7 +280,7 @@ class DeputiesScraper:
             # Wait for results to load (increased time and explicit spinner wait)
             import time
 
-            from congreso_analisis.utils.selenium_utils import paginate_table
+            from congress_analysis.utils.selenium_utils import paginate_table
 
             time.sleep(8)
             wait_for_spinner(self.wait)

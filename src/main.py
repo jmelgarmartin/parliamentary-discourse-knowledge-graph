@@ -14,12 +14,12 @@ import pandas as pd
 # Allow execution of main.py within the src/ directory path context.
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from congreso_analisis.ingestion.scrappers.deputies_scraper import DeputiesScraper  # noqa: E402
-from congreso_analisis.ingestion.scrappers.groups_scraper import GroupsScraper  # noqa: E402
-from congreso_analisis.ingestion.scrappers.sessions_scraper import SessionsScraper  # noqa: E402
-from congreso_analisis.ingestion.transformers.substitutions_enricher import SubstitutionsEnricher  # noqa: E402
-from congreso_analisis.silver.enrich_legislature import run_enrichment as run_interventions_enrichment  # noqa: E402
-from congreso_analisis.silver.interventions_extractor import InterventionsExtractor  # noqa: E402
+from congress_analysis.ingestion.scrappers.deputies_scraper import DeputiesScraper  # noqa: E402
+from congress_analysis.ingestion.scrappers.groups_scraper import GroupsScraper  # noqa: E402
+from congress_analysis.ingestion.scrappers.sessions_scraper import SessionsScraper  # noqa: E402
+from congress_analysis.ingestion.transformers.substitutions_enricher import SubstitutionsEnricher  # noqa: E402
+from congress_analysis.silver.enrich_legislature import run_enrichment as run_interventions_enrichment  # noqa: E402
+from congress_analysis.silver.interventions_extractor import InterventionsExtractor  # noqa: E402
 
 
 def setup_logging(process_name: str, log_level: str = "INFO") -> None:

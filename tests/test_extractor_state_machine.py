@@ -1,4 +1,4 @@
-from congreso_analisis.processing.speaker_detector import SpeakerDetector
+from congress_analysis.processing.speaker_detector import SpeakerDetector
 
 
 class MockFile:

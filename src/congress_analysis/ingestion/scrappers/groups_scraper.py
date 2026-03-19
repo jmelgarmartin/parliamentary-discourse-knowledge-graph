@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import duckdb
 import pandas as pd
-from congreso_analisis.utils.selenium_utils import (
+from congress_analysis.utils.selenium_utils import (
     accept_cookies,
     click_next_page,
     click_with_wait,

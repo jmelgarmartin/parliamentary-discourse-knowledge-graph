@@ -5,8 +5,8 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from bs4 import BeautifulSoup
-from congreso_analisis.processing.speaker_detector import SpeakerDetector
-from congreso_analisis.processing.speaker_validation import SpeakerValidator
+from congress_analysis.processing.speaker_detector import SpeakerDetector
+from congress_analysis.processing.speaker_validation import SpeakerValidator
 
 logger = logging.getLogger(__name__)
 

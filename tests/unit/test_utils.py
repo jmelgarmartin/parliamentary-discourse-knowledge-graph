@@ -1,9 +1,9 @@
 """
 Unit tests for utilities.
 """
-from congreso_analisis.utils.hashing import text_to_hash
-from congreso_analisis.utils.logging_utils import setup_logger
-from congreso_analisis.utils.time_utils import get_current_partition_date
+from congress_analysis.utils.hashing import text_to_hash
+from congress_analysis.utils.logging_utils import setup_logger
+from congress_analysis.utils.time_utils import get_current_partition_date
 
 
 def test_hashing() -> None:
@@ -23,7 +23,7 @@ def test_logging_utils() -> None:
 
 def test_is_last_page_from_text() -> None:
     """Tests for is_last_page_from_text logic."""
-    from congreso_analisis.utils.selenium_utils import is_last_page_from_text
+    from congress_analysis.utils.selenium_utils import is_last_page_from_text
 
     assert is_last_page_from_text("Resultados 21 a 40 de 113") is False
     assert is_last_page_from_text("Resultados 101 a 113 de 113") is True
@@ -34,7 +34,7 @@ def test_is_last_page_from_text() -> None:
 
 def test_parse_pagination_text() -> None:
     """Tests the private pagination text parsing helper."""
-    from congreso_analisis.utils.selenium_utils import _parse_pagination_text
+    from congress_analysis.utils.selenium_utils import _parse_pagination_text
 
     f, t, z = _parse_pagination_text("Resultados 1 a 20 de 100")
     assert f == 1
@@ -59,7 +59,7 @@ def test_paginate_table_no_progress() -> None:
     """
     from unittest.mock import MagicMock
 
-    from congreso_analisis.utils.selenium_utils import paginate_table
+    from congress_analysis.utils.selenium_utils import paginate_table
 
     mock_driver = MagicMock()
     mock_wait = MagicMock()
@@ -117,7 +117,7 @@ def test_click_next_page_no_button() -> None:
     """Tests that click_next_page returns False if the button is not found."""
     from unittest.mock import MagicMock
 
-    from congreso_analisis.utils.selenium_utils import click_next_page
+    from congress_analysis.utils.selenium_utils import click_next_page
 
     mock_driver = MagicMock()
     mock_wait = MagicMock()
@@ -137,7 +137,7 @@ def test_click_next_page_disabled() -> None:
     """Tests that click_next_page returns False if the button is disabled."""
     from unittest.mock import MagicMock
 
-    from congreso_analisis.utils.selenium_utils import click_next_page
+    from congress_analysis.utils.selenium_utils import click_next_page
 
     mock_driver = MagicMock()
     mock_wait = MagicMock()
@@ -159,7 +159,7 @@ def test_click_next_page_no_progress() -> None:
     """Tests that click_next_page returns False if the signature does not change after click."""
     from unittest.mock import MagicMock
 
-    from congreso_analisis.utils.selenium_utils import click_next_page
+    from congress_analysis.utils.selenium_utils import click_next_page
 
     mock_driver = MagicMock()
     mock_wait = MagicMock()
@@ -201,7 +201,7 @@ def test_click_next_page_success() -> None:
     """Tests that click_next_page returns True if it advances correctly."""
     from unittest.mock import MagicMock
 
-    from congreso_analisis.utils.selenium_utils import click_next_page
+    from congress_analysis.utils.selenium_utils import click_next_page
 
     mock_driver = MagicMock()
     mock_wait = MagicMock()

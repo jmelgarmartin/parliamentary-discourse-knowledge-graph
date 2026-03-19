@@ -4,7 +4,7 @@ import pathlib
 from typing import Optional, Set
 
 import pandas as pd
-from congreso_analisis.processing.speaker_resolution import SpeakerResolver
+from congress_analysis.processing.speaker_resolution import SpeakerResolver
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

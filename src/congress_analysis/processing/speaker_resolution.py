@@ -6,8 +6,8 @@ from enum import Enum
 from typing import Any, Dict, Optional, Tuple
 
 import pandas as pd
-from congreso_analisis.processing.speaker_normalization import SpeakerNormalizer
-from congreso_analisis.processing.speaker_validation import SpeakerValidator
+from congress_analysis.processing.speaker_normalization import SpeakerNormalizer
+from congress_analysis.processing.speaker_validation import SpeakerValidator
 
 logger = logging.getLogger(__name__)
 

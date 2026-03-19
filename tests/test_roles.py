@@ -1,4 +1,4 @@
-from congreso_analisis.processing.roles import SpeakerRole, detect_role_by_regex, normalize_person_name
+from congress_analysis.processing.roles import SpeakerRole, detect_role_by_regex, normalize_person_name
 
 
 def test_normalize_person_name_chair() -> None:

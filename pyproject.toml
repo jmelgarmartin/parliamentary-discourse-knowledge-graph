@@ -5,7 +5,7 @@ description = "NLP-driven knowledge graph analysis of parliamentary discourse fr
 authors = ["Jesus Melgar"]
 license = "MIT"
 readme = "README.md"
-packages = [{include = "congreso_analisis", from = "src"}]
+packages = [{include = "congress_analysis", from = "src"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"
@@ -56,7 +56,7 @@ no_implicit_optional = true
 
 [tool.pytest.ini_options]
 minversion = "7.0"
-addopts = "--cov=congreso_analisis --cov-report=term-missing"
+addopts = "--cov=congress_analysis --cov-report=term-missing"
 testpaths = ["tests"]
 log_cli = true
 log_cli_level = "INFO"

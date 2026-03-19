@@ -1,6 +1,6 @@
 import re
 
-from congreso_analisis.processing.speaker_normalization import SpeakerNormalizer
+from congress_analysis.processing.speaker_normalization import SpeakerNormalizer
 
 
 class SpeakerValidator:

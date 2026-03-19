@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
-from congreso_analisis.processing.speaker_resolution import SpeakerResolver, SpeakerStatus
-from congreso_analisis.processing.speaker_validation import SpeakerValidator
+from congress_analysis.processing.speaker_resolution import SpeakerResolver, SpeakerStatus
+from congress_analysis.processing.speaker_validation import SpeakerValidator
 
 # Fake deputy data for testing
 DEPUTIES_DATA = [

@@ -1,5 +1,5 @@
-from congreso_analisis.processing.filters import is_admin_block, should_keep_for_graph
-from congreso_analisis.processing.roles import SpeakerRole
+from congress_analysis.processing.filters import is_admin_block, should_keep_for_graph
+from congress_analysis.processing.roles import SpeakerRole
 
 
 def test_is_admin_block() -> None:

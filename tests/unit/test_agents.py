@@ -1,8 +1,8 @@
 """
 Tests unitarios de los Agentes de Orquestación.
 """
-from congreso_analisis.orchestration.coordinator import Coordinator
-from congreso_analisis.orchestration.ingestion_agent import IngestionAgent
+from congress_analysis.orchestration.coordinator import Coordinator
+from congress_analysis.orchestration.ingestion_agent import IngestionAgent
 
 
 def test_ingestion_agent_run() -> None:
