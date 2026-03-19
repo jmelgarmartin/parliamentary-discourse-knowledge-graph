@@ -65,16 +65,26 @@ def main() -> None:
         "--no-headless", action="store_false", dest="headless", help="Run browser in non-headless mode (visible GUI)"
     )
     parser.add_argument(
-        "--experimental-streaming", action="store_true", help="Enable experimental in-memory streaming extraction"
+        "--experimental-streaming",
+        action="store_true",
+        help=(
+            "Enable experimental in-memory streaming extraction during session scraping"
+            " (generates validation artifacts)"
+        ),
     )
     parser.add_argument(
-        "--use-streaming-candidate", action="store_true", help="Use streaming candidate as downstream source"
+        "--use-streaming-candidate",
+        action="store_true",
+        help=(
+            "Use streaming candidate as downstream source for enrichment "
+            "(requires --experimental-streaming; subject to parity matching)"
+        ),
     )
     parser.add_argument(
         "--streaming-confidence-threshold",
         type=float,
         default=None,
-        help="Confidence threshold [0.0, 1.0] to promote streaming candidate",
+        help="Confidence threshold [0.0, 1.0] to promote streaming candidate (requires --use-streaming-candidate)",
     )
     args = parser.parse_args()
 
@@ -378,18 +388,24 @@ def main() -> None:
                 selection_policy = "strict_match"
                 if parity_status == "MATCH" and doc_level_parity == "MATCH" and row_level_parity == "MATCH":
                     selected_source = str(streaming_candidate_path)
-                    logger.info("Streaming candidate selected | policy=strict_match | status=MATCH")
+                    logger.info("Streaming candidate source selected | policy=strict_match | status=MATCH")
                 else:
-                    logger.info("Falling back to batch source | policy=strict_match | reason=strict_match_failed")
+                    logger.info(
+                        "Falling back to official batch source | policy=strict_match | reason=strict_match_failed"
+                    )
             else:
                 selection_policy = "confidence_threshold"
                 threshold = args.streaming_confidence_threshold
                 if confidence_level == "SKIPPED":
                     logger.info(
-                        "Falling back to batch source | policy=confidence_threshold | reason=validation_skipped"
+                        "Falling back to official batch source | policy=confidence_threshold"
+                        " | reason=validation_skipped"
                     )
                 elif not streaming_candidate_path.exists():
-                    logger.info("Falling back to batch source | policy=confidence_threshold | reason=candidate_missing")
+                    logger.info(
+                        "Falling back to official batch source | policy=confidence_threshold"
+                        " | reason=candidate_missing"
+                    )
                 elif confidence_score >= threshold:
                     selected_source = str(streaming_candidate_path)
                     logger.info(
@@ -398,7 +414,7 @@ def main() -> None:
                     )
                 else:
                     logger.info(
-                        f"Falling back to batch source | policy=confidence_threshold"
+                        f"Falling back to official batch source | policy=confidence_threshold"
                         f" | confidence={confidence_score:.4f} < threshold={threshold:.4f}"
                         f" | reason=confidence_below_threshold"
                     )

@@ -95,6 +95,55 @@ The `ParquetComparator` allows comparing a specific backup against the current s
 
 This tool is used as a standalone validator to guarantee that changes in the pipeline logic do not unintentionally alter the resulting datasets.
 
+## Experimental Streaming Pipeline
+
+The project includes an experimental in-memory extraction pipeline that runs concurrently with session scraping to reduce total execution time.
+
+### Flag Hierarchy
+- `--experimental-streaming`: Enables the in-memory extraction and generates validation artifacts.
+- `--use-streaming-candidate`: Opts into using the streaming results for downstream enrichment (requires `--experimental-streaming`).
+- `--streaming-confidence-threshold`: Sets a custom confidence gate for candidate promotion (requires `--use-streaming-candidate`).
+
+### Modes of Operation
+
+| Mode | CommandLine Arguments | Official Outputs | Candidate Artifact | Parity Report | Downstream Source |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Default** | (none) | Updated (Batch) | Not generated | Not generated | Official Batch |
+| **Validation** | `--experimental-streaming` | Updated (Batch) | Generated | Generated | Official Batch |
+| **Strict Match** | `--experimental-streaming --use-streaming-candidate` | Updated (Batch) | Generated | Generated | Candidate (if 100% match) |
+| **Threshold** | `--experimental-streaming --use-streaming-candidate --streaming-confidence-threshold 0.95` | Updated (Batch) | Generated | Generated | Candidate (if score >= 0.95) |
+
+> [!NOTE]
+> Even when a candidate is promoted, the **official batch output** (`interventions_raw.parquet`) is always updated and preserved as the system of record in `data/silver/`.
+
+### Generated Artifacts
+- **Parity Report**: `data/validation/legislature={term}/parity_report.json`
+  - Contains global, document, and row-level parity statuses + confidence metrics.
+- **Streaming Candidate**: `data/validation/legislature={term}/interventions_streaming_candidate.parquet`
+  - The dataset produced by the experimental pipeline.
+
+### Command Examples
+
+**1. Standard robust run (Default):**
+```bash
+python src/main.py --term 15
+```
+
+**2. Validation run (Compare streaming vs batch without switching):**
+```bash
+python src/main.py --term 15 --experimental-streaming
+```
+
+**3. Strict promotion (Only switch if streaming is a perfect match):**
+```bash
+python src/main.py --term 15 --experimental-streaming --use-streaming-candidate
+```
+
+**4. Threshold-gated promotion (Switch if streaming is "good enough"):**
+```bash
+python src/main.py --term 15 --experimental-streaming --use-streaming-candidate --streaming-confidence-threshold 0.99
+```
+
 ## Local Development Environment
 
 ### Requirements
