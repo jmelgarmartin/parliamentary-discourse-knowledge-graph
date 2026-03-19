@@ -8,6 +8,7 @@ import os
 import pathlib
 import sys
 import time
+from typing import Optional
 
 import pandas as pd
 from congress_analysis.backup_manager import BackupManager
@@ -67,14 +68,25 @@ def main() -> None:
         "--experimental-streaming", action="store_true", help="Enable experimental in-memory streaming extraction"
     )
     parser.add_argument(
-        "--use-streaming-candidate",
-        action="store_true",
-        help="Use the streaming candidate as the downstream source if validation matches",
+        "--use-streaming-candidate", action="store_true", help="Use streaming candidate as downstream source"
+    )
+    parser.add_argument(
+        "--streaming-confidence-threshold",
+        type=float,
+        default=None,
+        help="Confidence threshold [0.0, 1.0] to promote streaming candidate",
     )
     args = parser.parse_args()
 
     setup_logging("pipeline_execution", log_level=args.log_level)
     logger = logging.getLogger(__name__)
+
+    if args.streaming_confidence_threshold is not None:
+        if not (0.0 <= args.streaming_confidence_threshold <= 1.0):
+            logger.error(
+                f"Invalid streaming confidence threshold: {args.streaming_confidence_threshold}. Must be in [0.0, 1.0]."
+            )
+            sys.exit(1)
 
     # --- PHASE 0: Pre-execution Backup ---
     logger.info(">>> phase 0: pre-execution backup")
@@ -158,6 +170,8 @@ def main() -> None:
 
     # Load Bronze data
     deputies_df = pd.read_parquet(deputies_path)
+    has_substitutes = 0
+    has_substituted_by = 0
 
     if substitutions_path.exists():
         substitutions_df = pd.read_parquet(substitutions_path)
@@ -165,8 +179,8 @@ def main() -> None:
 
         # --- SECTION A: Audit Metrics ---
         # 1. Row metrics
-        total_rows = len(substitutions_df)
-        if total_rows > 0:
+        total_rows_subst = len(substitutions_df)
+        if total_rows_subst > 0:
             has_substitutes = (substitutions_df["substitutes"].str.strip() != "").sum()
             has_substituted_by = (substitutions_df["substituted_by"].str.strip() != "").sum()
             both_empty = (
@@ -174,18 +188,18 @@ def main() -> None:
                 & (substitutions_df["substituted_by"].str.strip() == "")
             ).sum()
 
-            logger.info(f"Audit Metric - Total substitutions: {total_rows}")
+            logger.info(f"Audit Metric - Total substitutions: {total_rows_subst}")
             logger.info(
                 f"Audit Metric - Rows with 'substitutes': {has_substitutes} "
-                f"({(has_substitutes/total_rows)*100:.1f}%)"
+                f"({(has_substitutes/total_rows_subst)*100:.1f}%)"
             )
             logger.info(
                 f"Audit Metric - Rows with 'substituted_by': {has_substituted_by} "
-                f"({(has_substituted_by/total_rows)*100:.1f}%)"
+                f"({(has_substituted_by/total_rows_subst)*100:.1f}%)"
             )
-            logger.info(f"Audit Metric - Rows with both empty: {both_empty} ({(both_empty/total_rows)*100:.1f}%)")
+            logger.info(f"Audit Metric - Rows with both empty: {both_empty} ({(both_empty/total_rows_subst)*100:.1f}%)")
 
-            if both_empty > total_rows * 0.5:
+            if both_empty > total_rows_subst * 0.5:
                 logger.warning("More than 50% of substitution rows are empty. Check scraper selectors.")
         else:
             logger.info("Audit Metric - Total substitutions: 0")
@@ -197,7 +211,7 @@ def main() -> None:
     silver_deputies_df, silver_relationships_df = enricher.enrich(deputies_df, substitutions_df)
 
     # --- SECTION D: Validation & Match Check ---
-    expected_min_rels = (has_substitutes + has_substituted_by) if "has_substitutes" in locals() else 0
+    expected_min_rels = has_substitutes + has_substituted_by
     actual_rels = len(silver_relationships_df)
 
     logger.info(f"Validation - Expected approx relationships: {expected_min_rels}, Actual: {actual_rels}")
@@ -238,12 +252,18 @@ def main() -> None:
         logger.info("No new session files detected. Skipping interventions extraction.")
     t1_ext = time.time()
 
-    t1_ext = time.time()
+    # --- Default downstream source selection (Batch) ---
+    batch_interventions_path = (
+        pathlib.Path("data/silver/interventions") / f"legislature={args.term}" / "interventions_raw.parquet"
+    )
+    selected_source: Optional[str] = None
+    selection_policy: str = "batch_only"
 
-    # Default parity statuses for downstream selection
-    parity_status = "MATCH"
-    doc_level_parity = "MATCH"
-    row_level_parity = "MATCH"
+    # Parity statuses for reporting
+    parity_status = "NOT_RUN"
+    doc_level_parity = "NOT_RUN"
+    row_level_parity = "NOT_RUN"
+    confidence_metrics = {}
 
     # --- PHASE 7: Experimental Streaming Validation ---
     if args.experimental_streaming:
@@ -252,6 +272,7 @@ def main() -> None:
 
         val_dir = pathlib.Path(f"data/validation/legislature={args.term}")
         val_dir.mkdir(parents=True, exist_ok=True)
+        streaming_candidate_path = val_dir / "interventions_streaming_candidate.parquet"
 
         streaming_count = 0
         batch_subset_count = 0
@@ -268,29 +289,23 @@ def main() -> None:
             skip_reason = "no_new_files"
             logger.info("Parity validation SKIPPED: no new session files were processed in this run.")
         else:
-            # Persist streaming results (validation only)
             if streaming_records:
                 streaming_df = pd.DataFrame(streaming_records)
-                # Sort for deterministic candidate artifact (Silver alignment)
                 sort_cols = ["document_id", "intervention_order"]
                 if all(c in streaming_df.columns for c in sort_cols):
                     streaming_df.sort_values(sort_cols, inplace=True)
 
-                val_file = val_dir / "interventions_streaming_candidate.parquet"
-                streaming_df.to_parquet(val_file, index=False)
-                logger.info(f"Saved {len(streaming_df)} streaming-extracted records to {val_file}")
+                streaming_df.to_parquet(streaming_candidate_path, index=False)
+                logger.info(f"Saved {len(streaming_df)} streaming-extracted records to {streaming_candidate_path}")
                 streaming_count = len(streaming_df)
 
-                # Filter batch results to only include the same documents for fair comparison
                 processed_doc_ids = set(streaming_df["document_id"].unique())
                 batch_subset_df = df_ext[df_ext["document_id"].isin(processed_doc_ids)]
                 batch_subset_count = len(batch_subset_df)
                 parity_status = "MATCH" if streaming_count == batch_subset_count else "MISMATCH"
 
-                # Per-document validation
                 st_counts = streaming_df.groupby("document_id").size().to_dict()
                 bt_counts = batch_subset_df.groupby("document_id").size().to_dict()
-
                 all_docs = set(st_counts.keys()) | set(bt_counts.keys())
                 docs_compared = len(all_docs)
 
@@ -298,39 +313,25 @@ def main() -> None:
                 for doc_id in all_docs:
                     s_df_doc = streaming_df[streaming_df["document_id"] == doc_id]
                     b_df_doc = batch_subset_df[batch_subset_df["document_id"] == doc_id]
-
                     s_ids = set(s_df_doc["intervention_id"])
                     b_ids = set(b_df_doc["intervention_id"])
 
-                    # Quantitative metrics: symmetric match (intersection over union)
                     matched_rows_count += len(s_ids & b_ids)
                     total_rows_union_count += len(s_ids | b_ids)
 
-                    s_c = len(s_ids)
-                    b_c = len(b_ids)
-
-                    has_count_mismatch = s_c != b_c
-                    has_id_mismatch = s_ids != b_ids
-
-                    if has_count_mismatch or has_id_mismatch:
+                    if s_ids != b_ids:
                         mismatched_docs.append(
                             {
                                 "document_id": doc_id,
-                                "streaming_count": s_c,
-                                "batch_count": b_c,
-                                "diff": s_c - b_c,
+                                "streaming_count": len(s_ids),
+                                "batch_count": len(b_ids),
                                 "diagnosis": {
-                                    "missing_in_streaming": max(0, b_c - s_c),
-                                    "extra_in_streaming": max(0, s_c - b_c),
-                                    "row_level_mismatch": has_id_mismatch,
                                     "missing_row_keys_sample": list(b_ids - s_ids)[:5],
                                     "extra_row_keys_sample": list(s_ids - b_ids)[:5],
                                 },
                             }
                         )
-                        if has_id_mismatch:
-                            row_level_parity = "MISMATCH"
-
+                        row_level_parity = "MISMATCH"
                 doc_level_parity = "MATCH" if not mismatched_docs else "MISMATCH"
             else:
                 logger.warning("No streaming records collected despite new files being processed.")
@@ -339,24 +340,21 @@ def main() -> None:
                 row_level_parity = "MISMATCH"
                 skip_reason = "empty_streaming_records"
 
-        # Quantitative Confidence Metrics
+        # Quantitative Metrics & Confidence Mapping
         if parity_status == "SKIPPED":
+            confidence_score = 0.0
+            confidence_level = "SKIPPED"
             global_match_ratio = 0.0
             document_match_ratio = 0.0
             row_identity_match_ratio = 0.0
-            confidence_score = 0.0
-            confidence_level = "SKIPPED"
         else:
             global_match_ratio = 1.0 if parity_status == "MATCH" else 0.0
             document_match_ratio = (docs_compared - len(mismatched_docs)) / docs_compared if docs_compared > 0 else 1.0
             row_identity_match_ratio = (
                 matched_rows_count / total_rows_union_count if total_rows_union_count > 0 else 1.0
             )
-
-            # Weighted confidence score (0.2 global, 0.3 document, 0.5 row)
             confidence_score = 0.2 * global_match_ratio + 0.3 * document_match_ratio + 0.5 * row_identity_match_ratio
 
-            # Qualitative confidence level mapping
             if parity_status == "MATCH" and doc_level_parity == "MATCH" and row_level_parity == "MATCH":
                 confidence_level = "FULL_MATCH"
             elif confidence_score >= 0.99:
@@ -366,30 +364,70 @@ def main() -> None:
             else:
                 confidence_level = "LOW_CONFIDENCE"
 
-        # Structured Parity Report
-        report = {
-            "timestamp": pd.Timestamp.now().isoformat(),
-            "term": args.term,
-            "streaming_count": streaming_count,
-            "batch_subset_count": batch_subset_count,
-            "total_batch_count": len(df_ext) if df_ext is not None else 0,
-            "docs_compared": docs_compared,
-            "matched_documents": docs_compared - len(mismatched_docs),
-            "total_rows_considered": total_rows_union_count,
-            "matched_rows": matched_rows_count,
-            "parity_status": parity_status,
-            "document_level_parity": doc_level_parity,
-            "row_level_parity": row_level_parity,
+        confidence_metrics = {
             "global_match_ratio": round(global_match_ratio, 4),
             "document_match_ratio": round(document_match_ratio, 4),
             "row_identity_match_ratio": round(row_identity_match_ratio, 4),
             "confidence_score": round(confidence_score, 4),
             "confidence_level": confidence_level,
-            "diff_count": streaming_count - batch_subset_count,
+        }
+
+        # --- Decision Hierarchy for Downstream Source ---
+        if args.use_streaming_candidate:
+            if args.streaming_confidence_threshold is None:
+                selection_policy = "strict_match"
+                if parity_status == "MATCH" and doc_level_parity == "MATCH" and row_level_parity == "MATCH":
+                    selected_source = str(streaming_candidate_path)
+                    logger.info("Streaming candidate selected | policy=strict_match | status=MATCH")
+                else:
+                    logger.info("Falling back to batch source | policy=strict_match | reason=strict_match_failed")
+            else:
+                selection_policy = "confidence_threshold"
+                threshold = args.streaming_confidence_threshold
+                if confidence_level == "SKIPPED":
+                    logger.info(
+                        "Falling back to batch source | policy=confidence_threshold | reason=validation_skipped"
+                    )
+                elif not streaming_candidate_path.exists():
+                    logger.info("Falling back to batch source | policy=confidence_threshold | reason=candidate_missing")
+                elif confidence_score >= threshold:
+                    selected_source = str(streaming_candidate_path)
+                    logger.info(
+                        f"Streaming candidate promoted | policy=confidence_threshold"
+                        f" | confidence={confidence_score:.4f} >= threshold={threshold:.4f}"
+                    )
+                else:
+                    logger.info(
+                        f"Falling back to batch source | policy=confidence_threshold"
+                        f" | confidence={confidence_score:.4f} < threshold={threshold:.4f}"
+                        f" | reason=confidence_below_threshold"
+                    )
+        else:
+            selection_policy = "batch_only"
+            logger.info("Using official batch source | policy=batch_only")
+
+        # Create parity report (updated with final decision and metadata)
+        report = {
+            "legislature": args.term,
+            "timestamp": pd.Timestamp.now().isoformat(),
+            "policy_used": selection_policy,
+            "selected_source": selected_source or "OFFICIAL_BATCH",
+            "parity_status": parity_status,
+            "document_level_parity": doc_level_parity,
+            "row_level_parity": row_level_parity,
+            "streaming_count": streaming_count,
+            "batch_subset_count": batch_subset_count,
+            "docs_compared": docs_compared,
+            "matched_documents": docs_compared - len(mismatched_docs),
+            "total_rows_considered": total_rows_union_count,
+            "matched_rows": matched_rows_count,
             "mismatched_documents": mismatched_docs,
         }
+        report.update(confidence_metrics)
         if skip_reason:
             report["skip_reason"] = skip_reason
+        if args.streaming_confidence_threshold is not None:
+            report["streaming_confidence_threshold"] = args.streaming_confidence_threshold
 
         report_file = val_dir / "parity_report.json"
         with open(report_file, "w", encoding="utf-8") as f:
@@ -400,48 +438,21 @@ def main() -> None:
             logger.info(f"Validation summary: SKIPPED | reason={skip_reason}")
         else:
             logger.info(
-                f"Parity report: Global={parity_status}, Doc-Level={doc_level_parity}, Row-Level={row_level_parity}. "
-                f"Mismatched docs: {len(mismatched_docs)}. "
-                f"Diagnostics available in {report_file}"
+                f"Validation summary: {confidence_level}"
+                f" | confidence={confidence_score:.4f}"
+                f" | docs={docs_compared - len(mismatched_docs)}/{docs_compared}"
+                f" | rows={matched_rows_count}/{total_rows_union_count}"
             )
-            logger.info(
-                f"Validation summary: {confidence_level} | "
-                f"confidence={confidence_score:.4f} | "
-                f"docs={docs_compared - len(mismatched_docs)}/{docs_compared} | "
-                f"rows={matched_rows_count}/{total_rows_union_count}"
-            )
+    else:
+        logger.info("Using official batch source | policy=batch_only")
 
     # 6. Interventions Enrichment (Silver Layer)
     logger.info(">>> phase 6: interventions_enrichment (Silver Layer)")
     t0_int_enrich = time.time()
     if new_files:
-        logger.info("New data detected. Starting interventions enrichment...")
-
-        # Guarded source selection
-        batch_raw_path = f"data/silver/interventions/legislature={args.term}/interventions_raw.parquet"
-        selected_source = batch_raw_path
-
-        if args.use_streaming_candidate:
-            all_match = parity_status == "MATCH" and doc_level_parity == "MATCH" and row_level_parity == "MATCH"
-            if all_match:
-                candidate_path = f"data/validation/legislature={args.term}/interventions_streaming_candidate.parquet"
-                if pathlib.Path(candidate_path).exists():
-                    selected_source = candidate_path
-                    logger.info(
-                        f"--use-streaming-candidate enabled and parity matched. "
-                        f"Switching downstream source to: {selected_source}"
-                    )
-                else:
-                    logger.warning(
-                        f"--use-streaming-candidate enabled and parity matched, "
-                        f"but candidate file not found at {candidate_path}. Falling back to batch."
-                    )
-            else:
-                logger.warning(
-                    "--use-streaming-candidate enabled but validation failed. " "Falling back to official batch source."
-                )
-
-        run_interventions_enrichment(args.term, selected_source, None)
+        final_source = selected_source or str(batch_interventions_path)
+        logger.info(f"New data detected. Starting interventions enrichment using source: {final_source}")
+        run_interventions_enrichment(args.term, final_source, args.driver_path)
     else:
         logger.info("No new data to enrich. Skipping.")
     t1_int_enrich = time.time()
