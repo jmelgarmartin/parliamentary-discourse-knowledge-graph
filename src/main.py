@@ -63,6 +63,11 @@ def main() -> None:
     parser.add_argument(
         "--no-headless", action="store_false", dest="headless", help="Run browser in non-headless mode (visible GUI)"
     )
+    parser.add_argument(
+        "--experimental-streaming",
+        action="store_true",
+        help="Enable experimental in-memory extraction during scraping for validation purposes.",
+    )
     args = parser.parse_args()
 
     setup_logging("pipeline_execution", log_level=args.log_level)
@@ -109,7 +114,28 @@ def main() -> None:
     s_scraper = SessionsScraper(
         driver_path=args.driver_path, term=args.term, state_path=args.state_path, headless=args.headless
     )
-    sessions_df, new_files = s_scraper.run()
+
+    streaming_records = []
+    content_callback = None
+
+    if args.experimental_streaming:
+        logger.info("Experimental streaming enabled. Wiring callback for in-memory extraction.")
+        extractor_stream = InterventionsExtractor(args.term)
+
+        def extraction_callback(doc_id: str, html_content: str) -> None:
+            """Callback to trigger extraction immediately after HTML is obtained."""
+            try:
+                # Deduce doc_name as expected by the extractor
+                doc_name = f"{doc_id}.html"
+                records = extractor_stream.extract_from_content(html_content, doc_id, doc_name)
+                streaming_records.extend(records)
+                logger.debug(f"Stream-extracted {len(records)} interventions from {doc_id}")
+            except Exception as e:
+                logger.error(f"Error in experimental streaming callback for {doc_id}: {e}")
+
+        content_callback = extraction_callback
+
+    sessions_df, new_files = s_scraper.run(content_callback=content_callback)
     t1_sessions = time.time()
 
     sessions_path = pathlib.Path(f"data/bronze/sessions/legislature={args.term}/sessions.parquet")
@@ -137,24 +163,29 @@ def main() -> None:
         # --- SECTION A: Audit Metrics ---
         # 1. Row metrics
         total_rows = len(substitutions_df)
-        has_substitutes = (substitutions_df["substitutes"].str.strip() != "").sum()
-        has_substituted_by = (substitutions_df["substituted_by"].str.strip() != "").sum()
-        both_empty = (
-            (substitutions_df["substitutes"].str.strip() == "") & (substitutions_df["substituted_by"].str.strip() == "")
-        ).sum()
+        if total_rows > 0:
+            has_substitutes = (substitutions_df["substitutes"].str.strip() != "").sum()
+            has_substituted_by = (substitutions_df["substituted_by"].str.strip() != "").sum()
+            both_empty = (
+                (substitutions_df["substitutes"].str.strip() == "")
+                & (substitutions_df["substituted_by"].str.strip() == "")
+            ).sum()
 
-        logger.info(f"Audit Metric - Total substitutions: {total_rows}")
-        logger.info(
-            f"Audit Metric - Rows with 'substitutes': {has_substitutes} " f"({(has_substitutes/total_rows)*100:.1f}%)"
-        )
-        logger.info(
-            f"Audit Metric - Rows with 'substituted_by': {has_substituted_by} "
-            f"({(has_substituted_by/total_rows)*100:.1f}%)"
-        )
-        logger.info(f"Audit Metric - Rows with both empty: {both_empty} ({(both_empty/total_rows)*100:.1f}%)")
+            logger.info(f"Audit Metric - Total substitutions: {total_rows}")
+            logger.info(
+                f"Audit Metric - Rows with 'substitutes': {has_substitutes} "
+                f"({(has_substitutes/total_rows)*100:.1f}%)"
+            )
+            logger.info(
+                f"Audit Metric - Rows with 'substituted_by': {has_substituted_by} "
+                f"({(has_substituted_by/total_rows)*100:.1f}%)"
+            )
+            logger.info(f"Audit Metric - Rows with both empty: {both_empty} ({(both_empty/total_rows)*100:.1f}%)")
 
-        if both_empty > total_rows * 0.5:
-            logger.warning("More than 50% of substitution rows are empty. Check scraper selectors.")
+            if both_empty > total_rows * 0.5:
+                logger.warning("More than 50% of substitution rows are empty. Check scraper selectors.")
+        else:
+            logger.info("Audit Metric - Total substitutions: 0")
     else:
         logger.warning(f"Substitutions file not found at {substitutions_path}. Proceeding with empty substitutions.")
         substitutions_df = pd.DataFrame(columns=["name", "substitutes", "substituted_by", "start_date", "end_date"])
@@ -193,6 +224,8 @@ def main() -> None:
     logger.info(">>> phase 5: interventions_extractor (Silver Layer)")
     t0_ext = time.time()
     num_extracted = 0
+    df_ext = pd.DataFrame()
+
     if new_files:
         logger.info(f"New files detected ({len(new_files)}). Starting incremental extraction...")
         extractor = InterventionsExtractor(args.term)
@@ -211,6 +244,67 @@ def main() -> None:
     else:
         logger.info("No new data to enrich. Skipping.")
     t1_int_enrich = time.time()
+
+    # --- PHASE 7: Experimental Streaming Validation ---
+    if args.experimental_streaming:
+        logger.info(">>> phase 7: experimental streaming validation")
+        import json
+
+        val_dir = pathlib.Path(f"data/validation/legislature={args.term}")
+        val_dir.mkdir(parents=True, exist_ok=True)
+
+        streaming_count = 0
+        batch_subset_count = 0
+        parity_status = "MATCH"
+        skip_reason = None
+
+        if not new_files:
+            parity_status = "SKIPPED"
+            skip_reason = "no_new_files"
+            logger.info("Parity validation SKIPPED: no new session files were processed in this run.")
+        else:
+            # Persist streaming results (validation only)
+            if streaming_records:
+                streaming_df = pd.DataFrame(streaming_records)
+                val_file = val_dir / "interventions_streaming.parquet"
+                streaming_df.to_parquet(val_file, index=False)
+                logger.info(f"Saved {len(streaming_df)} streaming-extracted records to {val_file}")
+                streaming_count = len(streaming_df)
+
+                # Filter batch results to only include the same documents for fair comparison
+                processed_doc_ids = set(streaming_df["document_id"].unique())
+                batch_subset_df = df_ext[df_ext["document_id"].isin(processed_doc_ids)]
+                batch_subset_count = len(batch_subset_df)
+                parity_status = "MATCH" if streaming_count == batch_subset_count else "MISMATCH"
+            else:
+                logger.warning("No streaming records collected despite new files being processed.")
+                parity_status = "MISMATCH"
+                skip_reason = "empty_streaming_records"
+
+        # Structured Parity Report
+        report = {
+            "timestamp": pd.Timestamp.now().isoformat(),
+            "term": args.term,
+            "streaming_count": streaming_count,
+            "batch_subset_count": batch_subset_count,
+            "total_batch_count": len(df_ext) if df_ext is not None else 0,
+            "parity_status": parity_status,
+            "diff_count": streaming_count - batch_subset_count,
+        }
+        if skip_reason:
+            report["skip_reason"] = skip_reason
+
+        report_file = val_dir / "parity_report.json"
+        with open(report_file, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=4)
+
+        if parity_status == "SKIPPED":
+            logger.info(f"Parity check: SKIPPED ({skip_reason}). Report saved to {report_file}")
+        else:
+            logger.info(
+                f"Parity check: Streaming={streaming_count} vs BatchSubset={batch_subset_count}. "
+                f"Status: {parity_status}. Report saved to {report_file}"
+            )
 
     logger.info("=========================================")
     logger.info("EXECUTION METRICS SUMMARY")
