@@ -83,6 +83,18 @@ Before each execution, the `BackupManager`:
 
 This step is non-blocking: if a backup fails or data is missing, the pipeline continues after logging a warning.
 
+## Comparison Layer (Validation Tool)
+
+To ensure analytical consistency during development and refactoring, the project includes a **Comparison Layer**.
+
+The `ParquetComparator` allows comparing a specific backup against the current state of the project:
+- **Schema Validation**: Detects if columns have been added, removed, or renamed.
+- **Row Count**: Reports mismatches in the number of records.
+- **Content Integrity**: Uses normalized row hashing to identify exactly which rows are identical, missing, or new.
+- **Reporting**: Generates a `summary.json` report in `comparison_reports/{timestamp}/`.
+
+This tool is used as a standalone validator to guarantee that changes in the pipeline logic do not unintentionally alter the resulting datasets.
+
 ## Local Development Environment
 
 ### Requirements
