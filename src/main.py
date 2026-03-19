@@ -293,7 +293,16 @@ def main() -> None:
                     b_c = bt_counts.get(doc_id, 0)
                     if s_c != b_c:
                         mismatched_docs.append(
-                            {"document_id": doc_id, "streaming_count": s_c, "batch_count": b_c, "diff": s_c - b_c}
+                            {
+                                "document_id": doc_id,
+                                "streaming_count": s_c,
+                                "batch_count": b_c,
+                                "diff": s_c - b_c,
+                                "diagnosis": {
+                                    "missing_in_streaming": max(0, b_c - s_c),
+                                    "extra_in_streaming": max(0, s_c - b_c),
+                                },
+                            }
                         )
 
                 doc_level_parity = "MATCH" if not mismatched_docs else "MISMATCH"
@@ -324,12 +333,12 @@ def main() -> None:
             json.dump(report, f, indent=4)
 
         if parity_status == "SKIPPED":
-            logger.info(f"Parity check: SKIPPED ({skip_reason}). Report saved to {report_file}")
+            logger.info(f"Parity report: SKIPPED ({skip_reason}). Report saved to {report_file}")
         else:
             logger.info(
-                f"Parity check: Global={parity_status} (Stream={streaming_count}, Batch={batch_subset_count}), "
-                f"Doc-Level={doc_level_parity} ({len(mismatched_docs)} mismatches). "
-                f"Report saved to {report_file}"
+                f"Parity report: Global={parity_status}, Doc-Level={doc_level_parity}. "
+                f"Mismatched docs: {len(mismatched_docs)}. "
+                f"Diagnostics available in {report_file}"
             )
 
     logger.info("=========================================")
