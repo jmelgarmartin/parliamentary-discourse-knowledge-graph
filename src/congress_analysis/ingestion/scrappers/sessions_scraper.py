@@ -14,7 +14,7 @@ import os
 import pathlib
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import duckdb
 import pandas as pd
@@ -290,11 +290,14 @@ class SessionsScraper:
 
         return html_content
 
-    def _process_row(self, row: Any) -> Optional[Dict[str, Any]]:
+    def _process_row(
+        self, row: Any, content_callback: Optional[Callable[[str, str], None]] = None
+    ) -> Optional[Dict[str, Any]]:
         """
         Processes a single row from the publications table.
 
         :param row: Selenium WebElement representing the table row.
+        :param content_callback: Optional callback receiving (document_id, html_content).
         :return: A dictionary with metadata if successfully parsed, None otherwise.
         """
         # 1. Parse table info to generate ID
@@ -400,6 +403,13 @@ class SessionsScraper:
             self._update_document_state(document_id, document_url, "", "", "ERROR", "Failed to extract pleno content")
             return None
 
+        # Optional: Trigger content callback for on-the-fly processing
+        if content_callback:
+            try:
+                content_callback(document_id, html_content)
+            except Exception as e:
+                logger.error(f"Error in content_callback for {document_id}: {e}")
+
         checksum = self._calculate_checksum(html_content)
 
         # Step 2: Persist the content to disk
@@ -428,11 +438,15 @@ class SessionsScraper:
             "is_new": True,
         }
 
-    def run(self) -> tuple[pd.DataFrame, List[pathlib.Path]]:
+    def run(
+        self, content_callback: Optional[Callable[[str, str], None]] = None
+    ) -> tuple[pd.DataFrame, List[pathlib.Path]]:
         """
         Executes the scraping process for parliamentary sessions, maintaining idempotent state
         with DuckDB and persisting output to Raw HTML and Bronze Parquet structures.
 
+        :param content_callback: Optional callback called after each successful extraction
+                                 with (document_id, html_content).
         :return: A tuple (all_metadata_df, list_of_new_file_paths).
         """
         self._init_db()
@@ -466,7 +480,7 @@ class SessionsScraper:
                             # Refetch in case DOM changed
                             fresh_rows = self.driver.find_elements(By.XPATH, table_selector)
                             if i < len(fresh_rows):
-                                record = self._process_row(fresh_rows[i])
+                                record = self._process_row(fresh_rows[i], content_callback=content_callback)
                                 if record:
                                     metadata_records.append(record)
                             break

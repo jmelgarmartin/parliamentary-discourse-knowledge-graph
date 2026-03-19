@@ -81,6 +81,30 @@ class TestSessionsScraper(unittest.TestCase):
         mock_save.assert_called_once_with("DSCD-15-PL-12", "<html>extracted</html>")
         mock_update_state.assert_called_once()
 
+    @patch.object(SessionsScraper, "_get_document_state", return_value=None)
+    @patch.object(SessionsScraper, "_extract_pleno_content", return_value="<html>callback-test</html>")
+    @patch.object(SessionsScraper, "_save_pleno_content", return_value="path/to/file.html")
+    @patch.object(SessionsScraper, "_update_document_state")
+    def test_process_row_with_callback(
+        self, mock_update_state: MagicMock, mock_save: MagicMock, mock_extract: MagicMock, mock_get_state: MagicMock
+    ) -> None:
+        """Test that the content_callback is triggered when provided to _process_row."""
+        mock_row = MagicMock()
+        mock_cell = MagicMock()
+        mock_cell.text = "DSCD-15-PL-12 01/01/2024"
+        mock_row.find_elements.return_value = [mock_cell]
+        mock_row.text = "DSCD-15-PL-12 Pleno Congreso 01/01/2024"
+
+        mock_link = MagicMock()
+        mock_link.get_attribute.return_value = "https://example.com/doc"
+        mock_row.find_element.return_value = mock_link
+
+        mock_callback = MagicMock()
+
+        self.scraper._process_row(mock_row, content_callback=mock_callback)
+
+        mock_callback.assert_called_once_with("DSCD-15-PL-12", "<html>callback-test</html>")
+
 
 if __name__ == "__main__":
     unittest.main()

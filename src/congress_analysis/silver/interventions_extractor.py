@@ -62,10 +62,25 @@ class InterventionsExtractor:
 
         try:
             with open(file_path, "rb") as file:
-                content = file.read()
-            soup = BeautifulSoup(content, "html.parser")
+                content = file.read().decode("utf-8")
+            return self.extract_from_content(content, doc_id, doc_name)
         except Exception as e:
             logger.error(f"Error loading {file_path}: {e}")
+            return []
+
+    def extract_from_content(self, html_content: str, doc_id: str, doc_name: str) -> List[Dict[str, Any]]:
+        """
+        Extracts interventions from HTML content using the State Machine.
+
+        :param html_content: The HTML content of the session.
+        :param doc_id: Unique identifier for the document.
+        :param doc_name: Original document name (filename).
+        :return: List of structured intervention records.
+        """
+        try:
+            soup = BeautifulSoup(html_content, "html.parser")
+        except Exception as e:
+            logger.error(f"Error parsing HTML content for {doc_id}: {e}")
             return []
 
         for tag in soup(["script", "style"]):
