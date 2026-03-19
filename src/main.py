@@ -257,6 +257,7 @@ def main() -> None:
         batch_subset_count = 0
         parity_status = "MATCH"
         doc_level_parity = "MATCH"
+        row_level_parity = "MATCH"
         mismatched_docs = []
         docs_compared = 0
         skip_reason = None
@@ -264,6 +265,7 @@ def main() -> None:
         if not new_files:
             parity_status = "SKIPPED"
             doc_level_parity = "SKIPPED"
+            row_level_parity = "SKIPPED"
             skip_reason = "no_new_files"
             logger.info("Parity validation SKIPPED: no new session files were processed in this run.")
         else:
@@ -288,10 +290,21 @@ def main() -> None:
                 all_docs = set(st_counts.keys()) | set(bt_counts.keys())
                 docs_compared = len(all_docs)
 
+                row_level_parity = "MATCH"
                 for doc_id in all_docs:
-                    s_c = st_counts.get(doc_id, 0)
-                    b_c = bt_counts.get(doc_id, 0)
-                    if s_c != b_c:
+                    s_df_doc = streaming_df[streaming_df["document_id"] == doc_id]
+                    b_df_doc = batch_subset_df[batch_subset_df["document_id"] == doc_id]
+
+                    s_ids = set(s_df_doc["intervention_id"])
+                    b_ids = set(b_df_doc["intervention_id"])
+
+                    s_c = len(s_ids)
+                    b_c = len(b_ids)
+
+                    has_count_mismatch = s_c != b_c
+                    has_id_mismatch = s_ids != b_ids
+
+                    if has_count_mismatch or has_id_mismatch:
                         mismatched_docs.append(
                             {
                                 "document_id": doc_id,
@@ -301,15 +314,21 @@ def main() -> None:
                                 "diagnosis": {
                                     "missing_in_streaming": max(0, b_c - s_c),
                                     "extra_in_streaming": max(0, s_c - b_c),
+                                    "row_level_mismatch": has_id_mismatch,
+                                    "missing_row_keys_sample": list(b_ids - s_ids)[:5],
+                                    "extra_row_keys_sample": list(s_ids - b_ids)[:5],
                                 },
                             }
                         )
+                        if has_id_mismatch:
+                            row_level_parity = "MISMATCH"
 
                 doc_level_parity = "MATCH" if not mismatched_docs else "MISMATCH"
             else:
                 logger.warning("No streaming records collected despite new files being processed.")
                 parity_status = "MISMATCH"
                 doc_level_parity = "MISMATCH"
+                row_level_parity = "MISMATCH"
                 skip_reason = "empty_streaming_records"
 
         # Structured Parity Report
@@ -322,6 +341,7 @@ def main() -> None:
             "docs_compared": docs_compared,
             "parity_status": parity_status,
             "document_level_parity": doc_level_parity,
+            "row_level_parity": row_level_parity,
             "diff_count": streaming_count - batch_subset_count,
             "mismatched_documents": mismatched_docs,
         }
@@ -336,7 +356,7 @@ def main() -> None:
             logger.info(f"Parity report: SKIPPED ({skip_reason}). Report saved to {report_file}")
         else:
             logger.info(
-                f"Parity report: Global={parity_status}, Doc-Level={doc_level_parity}. "
+                f"Parity report: Global={parity_status}, Doc-Level={doc_level_parity}, Row-Level={row_level_parity}. "
                 f"Mismatched docs: {len(mismatched_docs)}. "
                 f"Diagnostics available in {report_file}"
             )

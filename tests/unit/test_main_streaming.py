@@ -65,8 +65,12 @@ class TestMainStreaming(unittest.TestCase):
 
         # Mock extractor to return a matching document_id for parity check
         mock_extractor_inst = mock_extractor.return_value
-        mock_extractor_inst.extract_from_content.return_value = [{"document_id": "doc1", "intervention": "test"}]
-        mock_extractor_inst.run.return_value = pd.DataFrame([{"document_id": "doc1", "intervention": "test"}])
+        mock_extractor_inst.extract_from_content.return_value = [
+            {"document_id": "doc1", "intervention": "test", "intervention_id": "id1"}
+        ]
+        mock_extractor_inst.run.return_value = pd.DataFrame(
+            [{"document_id": "doc1", "intervention": "test", "intervention_id": "id1"}]
+        )
 
         # Mock read_parquet to return robust DataFrames for all phases
         def mock_read_side_effect(path: Any, **kwargs: Any) -> pd.DataFrame:
@@ -101,7 +105,7 @@ class TestMainStreaming(unittest.TestCase):
     @patch("main.argparse.ArgumentParser.parse_args")
     @patch("main.setup_logging")
     @patch("main.BackupManager")
-    def test_main_with_document_mismatch(
+    def test_main_with_row_level_match(
         self,
         mock_backup: MagicMock,
         mock_logging: MagicMock,
@@ -111,7 +115,7 @@ class TestMainStreaming(unittest.TestCase):
         mock_extractor: MagicMock,
         mock_scraper: MagicMock,
     ) -> None:
-        """Test global match but document-level mismatch (cross-document count errors)."""
+        """Test row-level parity match (identity and counts match)."""
         mock_args.return_value = MagicMock(
             term="15",
             driver_path=None,
@@ -121,29 +125,79 @@ class TestMainStreaming(unittest.TestCase):
             experimental_streaming=True,
         )
 
-        # Scraper triggers callback for TWO documents
         mock_scraper_inst = mock_scraper.return_value
 
         def scraper_run_side_effect(*args: Any, **kwargs: Any) -> Tuple[Any, List[str]]:
             callback = kwargs.get("content_callback")
             if callback:
                 callback("doc1", "<html>c1</html>")
-                callback("doc2", "<html>c2</html>")
-            return (MagicMock(), ["test1.html", "test2.html"])
+            return (MagicMock(), ["test1.html"])
 
         mock_scraper_inst.run.side_effect = scraper_run_side_effect
 
-        # Streaming side: doc1 has 2 rows, doc2 has 0 rows (Total 2)
         mock_extractor_inst = mock_extractor.return_value
-        mock_extractor_inst.extract_from_content.side_effect = [
-            [{"document_id": "doc1", "int": "1"}, {"document_id": "doc1", "int": "2"}],
-            [],
+        mock_extractor_inst.extract_from_content.return_value = [
+            {"document_id": "doc1", "intervention": "A", "intervention_id": "idA"}
         ]
-
-        # Batch side: doc1 has 1 row, doc2 has 1 row (Total 2)
-        # Global match (2 vs 2), but Doc-Level mismatch!
         mock_extractor_inst.run.return_value = pd.DataFrame(
-            [{"document_id": "doc1", "int": "A"}, {"document_id": "doc2", "int": "B"}]
+            [{"document_id": "doc1", "intervention": "A", "intervention_id": "idA"}]
+        )
+
+        mock_read_parquet.return_value = self._get_mock_df()
+
+        with patch("main.GroupsScraper"), patch("main.DeputiesScraper"), patch(
+            "main.SubstitutionsEnricher",
+            return_value=MagicMock(enrich=MagicMock(return_value=(pd.DataFrame(), pd.DataFrame()))),
+        ), patch("main.run_interventions_enrichment"), patch("pathlib.Path.mkdir"), patch(
+            "pathlib.Path.exists", return_value=True
+        ), patch("builtins.open", mock_open()):
+            main.main()
+
+    @patch("main.SessionsScraper")
+    @patch("main.InterventionsExtractor")
+    @patch("main.pd.read_parquet")
+    @patch("main.pd.DataFrame.to_parquet")
+    @patch("main.argparse.ArgumentParser.parse_args")
+    @patch("main.setup_logging")
+    @patch("main.BackupManager")
+    def test_main_with_row_level_mismatch(
+        self,
+        mock_backup: MagicMock,
+        mock_logging: MagicMock,
+        mock_args: MagicMock,
+        mock_to_parquet: MagicMock,
+        mock_read_parquet: MagicMock,
+        mock_extractor: MagicMock,
+        mock_scraper: MagicMock,
+    ) -> None:
+        """Test row-level parity mismatch even when counts match."""
+        mock_args.return_value = MagicMock(
+            term="15",
+            driver_path=None,
+            state_path="state/bronze.duckdb",
+            log_level="INFO",
+            headless=True,
+            experimental_streaming=True,
+        )
+
+        mock_scraper_inst = mock_scraper.return_value
+
+        def scraper_run_side_effect(*args: Any, **kwargs: Any) -> Tuple[Any, List[str]]:
+            callback = kwargs.get("content_callback")
+            if callback:
+                callback("doc1", "<html>c1</html>")
+            return (MagicMock(), ["test1.html"])
+
+        mock_scraper_inst.run.side_effect = scraper_run_side_effect
+
+        mock_extractor_inst = mock_extractor.return_value
+        # Streaming has idA
+        mock_extractor_inst.extract_from_content.return_value = [
+            {"document_id": "doc1", "intervention": "A", "intervention_id": "idA"}
+        ]
+        # Batch has idB (different content/identity, same count)
+        mock_extractor_inst.run.return_value = pd.DataFrame(
+            [{"document_id": "doc1", "intervention": "B", "intervention_id": "idB"}]
         )
 
         mock_read_parquet.return_value = self._get_mock_df()
@@ -198,16 +252,87 @@ class TestMainStreaming(unittest.TestCase):
         # docB: Streaming extra 1 row (Batch=1, Stream=2)
         mock_extractor_inst = mock_extractor.return_value
         mock_extractor_inst.extract_from_content.side_effect = [
-            [{"document_id": "docA", "int": "1"}],  # Stream A (1)
-            [{"document_id": "docB", "int": "1"}, {"document_id": "docB", "int": "2"}],  # Stream B (2)
+            [{"document_id": "docA", "int": "1", "intervention_id": "idA1"}],  # Stream A (1)
+            [
+                {"document_id": "docB", "int": "1", "intervention_id": "idB1"},
+                {"document_id": "docB", "int": "2", "intervention_id": "idB2"},
+            ],  # Stream B (2)
         ]
 
         # Batch results
         mock_extractor_inst.run.return_value = pd.DataFrame(
             [
-                {"document_id": "docA", "int": "A1"},
-                {"document_id": "docA", "int": "A2"},
-                {"document_id": "docB", "int": "B1"},
+                {"document_id": "docA", "int": "A1", "intervention_id": "idA1"},
+                {"document_id": "docA", "int": "A2", "intervention_id": "idA2"},
+                {"document_id": "docB", "int": "B1", "intervention_id": "idB1"},
+            ]
+        )
+
+        mock_read_parquet.return_value = self._get_mock_df()
+
+        with patch("main.GroupsScraper"), patch("main.DeputiesScraper"), patch(
+            "main.SubstitutionsEnricher",
+            return_value=MagicMock(enrich=MagicMock(return_value=(pd.DataFrame(), pd.DataFrame()))),
+        ), patch("main.run_interventions_enrichment"), patch("pathlib.Path.mkdir"), patch(
+            "pathlib.Path.exists", return_value=True
+        ), patch("builtins.open", mock_open()):
+            main.main()
+
+    @patch("main.SessionsScraper")
+    @patch("main.InterventionsExtractor")
+    @patch("main.pd.read_parquet")
+    @patch("main.pd.DataFrame.to_parquet")
+    @patch("main.argparse.ArgumentParser.parse_args")
+    @patch("main.setup_logging")
+    @patch("main.BackupManager")
+    def test_main_with_document_mismatch(
+        self,
+        mock_backup: MagicMock,
+        mock_logging: MagicMock,
+        mock_args: MagicMock,
+        mock_to_parquet: MagicMock,
+        mock_read_parquet: MagicMock,
+        mock_extractor: MagicMock,
+        mock_scraper: MagicMock,
+    ) -> None:
+        """Test global match but document-level mismatch (cross-document count errors)."""
+        mock_args.return_value = MagicMock(
+            term="15",
+            driver_path=None,
+            state_path="state/bronze.duckdb",
+            log_level="INFO",
+            headless=True,
+            experimental_streaming=True,
+        )
+
+        # Scraper triggers callback for TWO documents
+        mock_scraper_inst = mock_scraper.return_value
+
+        def scraper_run_side_effect(*args: Any, **kwargs: Any) -> Tuple[Any, List[str]]:
+            callback = kwargs.get("content_callback")
+            if callback:
+                callback("doc1", "<html>c1</html>")
+                callback("doc2", "<html>c2</html>")
+            return (MagicMock(), ["test1.html", "test2.html"])
+
+        mock_scraper_inst.run.side_effect = scraper_run_side_effect
+
+        # Streaming side: doc1 has 2 rows, doc2 has 0 rows (Total 2)
+        mock_extractor_inst = mock_extractor.return_value
+        mock_extractor_inst.extract_from_content.side_effect = [
+            [
+                {"document_id": "doc1", "int": "1", "intervention_id": "id1_1"},
+                {"document_id": "doc1", "int": "2", "intervention_id": "id1_2"},
+            ],
+            [],
+        ]
+
+        # Batch side: doc1 has 1 row, doc2 has 1 row (Total 2)
+        # Global match (2 vs 2), but Doc-Level mismatch!
+        mock_extractor_inst.run.return_value = pd.DataFrame(
+            [
+                {"document_id": "doc1", "int": "A", "intervention_id": "id1_1"},
+                {"document_id": "doc2", "int": "B", "intervention_id": "id2_1"},
             ]
         )
 
