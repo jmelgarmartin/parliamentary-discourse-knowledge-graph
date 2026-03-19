@@ -242,8 +242,14 @@ class SessionsScraper:
             [self.dataset, self.term, document_id, document_url, checksum, raw_path, now_utc, status, error_message],
         )
 
-    def _save_raw_html(self, document_id: str, html_content: str) -> str:
-        """Saves the raw HTML portlet to the filesystem and returns the path."""
+    def _save_pleno_content(self, document_id: str, html_content: str) -> str:
+        """
+        Persists the pleno content (HTML) to the filesystem.
+
+        :param document_id: Unique identifier for the document.
+        :param html_content: The HTML content to save.
+        :return: String representation of the saved file path.
+        """
         out_dir = pathlib.Path(self.raw_root) / self.dataset / f"legislature={self.term}"
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -253,8 +259,13 @@ class SessionsScraper:
 
         return str(file_path)
 
-    def _extract_portlet_html(self, document_url: str) -> Optional[str]:
-        """Opens a new tab, navigates to the document URL, extracts portlet HTML, and closes the tab."""
+    def _extract_pleno_content(self, document_url: str) -> Optional[str]:
+        """
+        Obtains the useful pleno content in memory by navigating to the document URL.
+
+        :param document_url: URL to the parliamentary session document.
+        :return: The HTML content of the session portlet if successful, None otherwise.
+        """
         if not self.driver or not self.wait:
             return None
 
@@ -383,15 +394,17 @@ class SessionsScraper:
 
         logger.info(f"Processing document {document_id} from {document_url}")
 
-        html_content = self._extract_portlet_html(document_url)
+        # Step 1: Obtain the useful pleno content in memory
+        html_content = self._extract_pleno_content(document_url)
         if not html_content:
-            self._update_document_state(document_id, document_url, "", "", "ERROR", "Failed to extract portlet HTML")
+            self._update_document_state(document_id, document_url, "", "", "ERROR", "Failed to extract pleno content")
             return None
 
         checksum = self._calculate_checksum(html_content)
 
+        # Step 2: Persist the content to disk
         try:
-            raw_path = self._save_raw_html(document_id, html_content)
+            raw_path = self._save_pleno_content(document_id, html_content)
             self._update_document_state(document_id, document_url, checksum, raw_path, "SUCCESS")
             logger.info(f"Saved new or updated document: {document_id}")
         except Exception as e:
