@@ -10,9 +10,11 @@ import sys
 import time
 
 import pandas as pd
+from congress_analysis.backup_manager import BackupManager
 
 # Allow execution of main.py within the src/ directory path context.
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 
 from congress_analysis.ingestion.scrappers.deputies_scraper import DeputiesScraper  # noqa: E402
 from congress_analysis.ingestion.scrappers.groups_scraper import GroupsScraper  # noqa: E402
@@ -65,6 +67,15 @@ def main() -> None:
 
     setup_logging("pipeline_execution", log_level=args.log_level)
     logger = logging.getLogger(__name__)
+
+    # --- PHASE 0: Pre-execution Backup ---
+    logger.info(">>> phase 0: pre-execution backup")
+    backup_mgr = BackupManager()
+    backup_path = backup_mgr.create_backup()
+    if backup_path:
+        logger.info(f"Backup created successfully at: {backup_path}")
+    else:
+        logger.warning("Backup skipped or failed. Continuing with pipeline execution.")
 
     logger.info("=========================================")
     logger.info(f"STARTING PIPELINE FOR LEGISLATURE {args.term}")

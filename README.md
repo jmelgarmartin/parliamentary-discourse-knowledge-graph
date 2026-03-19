@@ -71,6 +71,18 @@ The system:
 
 This guarantees consistency and prevents duplication or divergence across analytical stages.
 
+## Pre-execution Backup
+
+To ensure data safety before any transformation, the system includes a **Backup Layer**. 
+
+Before each execution, the `BackupManager`:
+- Creates a timestamped directory in `backups/YYYY-MM-DD_HHMMSS/`.
+- Copies all `.parquet` files from Bronze and Silver layers.
+- Copies `government_manual_mapping.csv` reference files.
+- Generates a `manifest.json` with metadata (file paths and sizes) of the backed-up assets.
+
+This step is non-blocking: if a backup fails or data is missing, the pipeline continues after logging a warning.
+
 ## Local Development Environment
 
 ### Requirements
