@@ -257,6 +257,8 @@ def main() -> None:
         batch_subset_count = 0
         mismatched_docs = []
         docs_compared = 0
+        matched_rows_count = 0
+        total_rows_union_count = 0
         skip_reason = None
 
         if not new_files:
@@ -300,6 +302,10 @@ def main() -> None:
                     s_ids = set(s_df_doc["intervention_id"])
                     b_ids = set(b_df_doc["intervention_id"])
 
+                    # Quantitative metrics: symmetric match (intersection over union)
+                    matched_rows_count += len(s_ids & b_ids)
+                    total_rows_union_count += len(s_ids | b_ids)
+
                     s_c = len(s_ids)
                     b_c = len(b_ids)
 
@@ -333,6 +339,33 @@ def main() -> None:
                 row_level_parity = "MISMATCH"
                 skip_reason = "empty_streaming_records"
 
+        # Quantitative Confidence Metrics
+        if parity_status == "SKIPPED":
+            global_match_ratio = 0.0
+            document_match_ratio = 0.0
+            row_identity_match_ratio = 0.0
+            confidence_score = 0.0
+            confidence_level = "SKIPPED"
+        else:
+            global_match_ratio = 1.0 if parity_status == "MATCH" else 0.0
+            document_match_ratio = (docs_compared - len(mismatched_docs)) / docs_compared if docs_compared > 0 else 1.0
+            row_identity_match_ratio = (
+                matched_rows_count / total_rows_union_count if total_rows_union_count > 0 else 1.0
+            )
+
+            # Weighted confidence score (0.2 global, 0.3 document, 0.5 row)
+            confidence_score = 0.2 * global_match_ratio + 0.3 * document_match_ratio + 0.5 * row_identity_match_ratio
+
+            # Qualitative confidence level mapping
+            if parity_status == "MATCH" and doc_level_parity == "MATCH" and row_level_parity == "MATCH":
+                confidence_level = "FULL_MATCH"
+            elif confidence_score >= 0.99:
+                confidence_level = "HIGH_CONFIDENCE"
+            elif confidence_score >= 0.90:
+                confidence_level = "PARTIAL_MATCH"
+            else:
+                confidence_level = "LOW_CONFIDENCE"
+
         # Structured Parity Report
         report = {
             "timestamp": pd.Timestamp.now().isoformat(),
@@ -341,9 +374,17 @@ def main() -> None:
             "batch_subset_count": batch_subset_count,
             "total_batch_count": len(df_ext) if df_ext is not None else 0,
             "docs_compared": docs_compared,
+            "matched_documents": docs_compared - len(mismatched_docs),
+            "total_rows_considered": total_rows_union_count,
+            "matched_rows": matched_rows_count,
             "parity_status": parity_status,
             "document_level_parity": doc_level_parity,
             "row_level_parity": row_level_parity,
+            "global_match_ratio": round(global_match_ratio, 4),
+            "document_match_ratio": round(document_match_ratio, 4),
+            "row_identity_match_ratio": round(row_identity_match_ratio, 4),
+            "confidence_score": round(confidence_score, 4),
+            "confidence_level": confidence_level,
             "diff_count": streaming_count - batch_subset_count,
             "mismatched_documents": mismatched_docs,
         }
@@ -356,11 +397,18 @@ def main() -> None:
 
         if parity_status == "SKIPPED":
             logger.info(f"Parity report: SKIPPED ({skip_reason}). Report saved to {report_file}")
+            logger.info(f"Validation summary: SKIPPED | reason={skip_reason}")
         else:
             logger.info(
                 f"Parity report: Global={parity_status}, Doc-Level={doc_level_parity}, Row-Level={row_level_parity}. "
                 f"Mismatched docs: {len(mismatched_docs)}. "
                 f"Diagnostics available in {report_file}"
+            )
+            logger.info(
+                f"Validation summary: {confidence_level} | "
+                f"confidence={confidence_score:.4f} | "
+                f"docs={docs_compared - len(mismatched_docs)}/{docs_compared} | "
+                f"rows={matched_rows_count}/{total_rows_union_count}"
             )
 
     # 6. Interventions Enrichment (Silver Layer)
