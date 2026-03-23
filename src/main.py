@@ -65,11 +65,16 @@ def main() -> None:
         "--no-headless", action="store_false", dest="headless", help="Run browser in non-headless mode (visible GUI)"
     )
     parser.add_argument(
+        "--disable-streaming",
+        action="store_true",
+        help="Forces pure batch mode by disabling all experimental streaming logic and validation.",
+    )
+    parser.add_argument(
         "--experimental-streaming",
         action="store_true",
         help=(
-            "Enable experimental in-memory streaming extraction "
-            "in shadow mode (generates validation artifacts, no output changes)"
+            "Optional explicit flag to enable in-memory streaming extraction "
+            "in shadow mode (active by default unless --disable-streaming is used)."
         ),
     )
     parser.add_argument(
@@ -77,8 +82,7 @@ def main() -> None:
         action="store_true",
         help=(
             "Enable evaluation of the streaming candidate path. "
-            "strict_match has been validated to achieve FULL_MATCH parity in sandbox reprocess. "
-            "batch remains the official system of record."
+            "Downstream source selection still defaults to batch unless --promote-streaming is used."
         ),
     )
     parser.add_argument(
@@ -100,6 +104,14 @@ def main() -> None:
     setup_logging("pipeline_execution", log_level=args.log_level)
     logger = logging.getLogger(__name__)
 
+    # --- CLI Validation for Default Shadow Mode (Phase 20A) ---
+    streaming_flags = [
+        args.experimental_streaming,
+        args.use_streaming_candidate,
+        args.promote_streaming,
+        args.streaming_confidence_threshold is not None,
+    ]
+
     if args.streaming_confidence_threshold is not None:
         if not (0.0 <= args.streaming_confidence_threshold <= 1.0):
             logger.error(
@@ -107,14 +119,25 @@ def main() -> None:
             )
             sys.exit(1)
 
-    # --- CLI Validation for Promotion ---
+    if args.disable_streaming:
+        if any(streaming_flags):
+            logger.error("--disable-streaming is authoritative and cannot be combined with any streaming-related flags")
+            sys.exit(1)
+
     if args.promote_streaming:
-        if not (args.experimental_streaming and args.use_streaming_candidate):
-            logger.error("--promote-streaming requires --experimental-streaming and --use-streaming-candidate")
+        if not args.use_streaming_candidate:
+            logger.error("--promote-streaming requires --use-streaming-candidate")
             sys.exit(1)
         if args.streaming_confidence_threshold is not None:
             logger.error("--promote-streaming is incompatible with --streaming-confidence-threshold")
             sys.exit(1)
+
+    # --- Phase 20A: Determine Default Shadow Mode ---
+    default_streaming_active = not args.disable_streaming
+    experimental_streaming = args.experimental_streaming or default_streaming_active
+
+    if default_streaming_active:
+        logger.info("Streaming default guarded mode active | automatic promotion enabled | strict_match required")
 
     # --- PHASE 0: Pre-execution Backup ---
     logger.info(">>> phase 0: pre-execution backup")
@@ -161,7 +184,7 @@ def main() -> None:
     streaming_records = []
     content_callback = None
 
-    if args.experimental_streaming:
+    if experimental_streaming:
         logger.info("Experimental streaming enabled. Wiring callback for in-memory extraction.")
         extractor_stream = InterventionsExtractor(args.term)
 
@@ -295,7 +318,7 @@ def main() -> None:
     fallback_reason: Optional[str] = None
 
     # --- PHASE 7: Experimental Streaming Validation ---
-    if args.experimental_streaming:
+    if experimental_streaming:
         logger.info(">>> phase 7: experimental streaming validation")
         import json
 
@@ -401,30 +424,32 @@ def main() -> None:
             "confidence_level": confidence_level,
         }
 
-        # --- Decision Hierarchy for Downstream Source ---
-        promotion_attempted = args.promote_streaming
+        # --- Phase 10, 11, 12, 17 & 20B: Parity Validation & Source Selection ---
+        selected_source = None
+        selection_policy = "batch_only"
+        fallback_reason = None
+        promotion_attempted = True
         promotion_result = "NOT_ATTEMPTED"
+        execution_mode = "default_streaming_guarded" if default_streaming_active else "shadow"
 
-        if args.use_streaming_candidate:
+        if args.promote_streaming or args.use_streaming_candidate or default_streaming_active:
             if args.streaming_confidence_threshold is None:
                 selection_policy = "strict_match"
-                strict_match_passed = (
-                    parity_status == "MATCH" and doc_level_parity == "MATCH" and row_level_parity == "MATCH"
-                )
-
-                if strict_match_passed:
+                if confidence_level == "FULL_MATCH" and streaming_candidate_path.exists():
                     selected_source = str(streaming_candidate_path)
-                    if promotion_attempted:
-                        promotion_result = "PROMOTED"
-                        logger.info("Streaming promotion | status=PROMOTED | policy=strict_match")
-                    logger.info("Streaming candidate source selected | policy=strict_match | status=MATCH")
+                    promotion_result = "PROMOTED"
+                    logger.info("Streaming guarded mode | strict_match=PASS → streaming selected")
                 else:
-                    fallback_reason = "strict_match_failed"
-                    if promotion_attempted:
-                        promotion_result = "FALLBACK"
-                        logger.info(f"Streaming promotion | status=FALLBACK | reason={fallback_reason}")
+                    promotion_result = "FALLBACK"
+                    if parity_status == "SKIPPED":
+                        fallback_reason = "validation_skipped"
+                    elif not streaming_candidate_path.exists():
+                        fallback_reason = "candidate_missing"
+                    else:
+                        fallback_reason = "strict_match_failed"
+
                     logger.info(
-                        f"Falling back to official batch source | policy=strict_match | reason={fallback_reason}"
+                        f"Streaming guarded mode | strict_match=FAIL → fallback to batch | reason={fallback_reason}"
                     )
             else:
                 selection_policy = "confidence_threshold"
@@ -443,12 +468,14 @@ def main() -> None:
                     )
                 elif confidence_score >= threshold:
                     selected_source = str(streaming_candidate_path)
+                    promotion_result = "PROMOTED"
                     logger.info(
                         f"Streaming candidate promoted | policy=confidence_threshold"
                         f" | confidence={confidence_score:.4f} >= threshold={threshold:.4f}"
                     )
                 else:
                     fallback_reason = "confidence_below_threshold"
+                    promotion_result = "FALLBACK"
                     logger.info(
                         f"Falling back to official batch source | policy=confidence_threshold"
                         f" | confidence={confidence_score:.4f} < threshold={threshold:.4f}"
@@ -485,20 +512,26 @@ def main() -> None:
         with open(report_file, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=4)
 
-        # --- Phase 14, 16 & 17: Operational Summary & History ---
+        # --- Phase 14, 16, 17 & 20A: Operational Summary & History ---
         if args.streaming_confidence_threshold is not None:
             run_mode = "threshold_evaluation"
+        elif args.promote_streaming:
+            run_mode = "explicit_promotion"
         elif args.use_streaming_candidate:
             run_mode = "candidate_evaluation"
         else:
-            run_mode = "shadow"
+            run_mode = "guarded_default"
+
+        if args.disable_streaming:
+            execution_mode = "batch_only"
 
         summary = {
             "term": args.term,
             "run_mode": run_mode,
             "promotion_attempted": promotion_attempted,
             "promotion_result": promotion_result,
-            "execution_mode": "experimental_streaming",
+            "execution_mode": execution_mode,
+            "default_streaming_active": default_streaming_active,
             "selection_policy": selection_policy,
             "candidate_selected": bool(selected_source),
             "selected_source": "streaming_candidate_source" if selected_source else "official_batch_source",

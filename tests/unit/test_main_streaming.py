@@ -49,6 +49,7 @@ class TestMainStreaming(unittest.TestCase):
         """Verify 1.0 confidence and FULL_MATCH on perfect parity."""
         mock_args.return_value = MagicMock(
             term="15",
+            disable_streaming=False,
             experimental_streaming=True,
             use_streaming_candidate=False,
             promote_streaming=False,
@@ -95,6 +96,7 @@ class TestMainStreaming(unittest.TestCase):
         """Verify reduced confidence score on row-identity mismatch."""
         mock_args.return_value = MagicMock(
             term="15",
+            disable_streaming=False,
             experimental_streaming=True,
             use_streaming_candidate=False,
             promote_streaming=False,
@@ -138,6 +140,7 @@ class TestMainStreaming(unittest.TestCase):
         """Verify 0.0 confidence and SKIPPED status when no files processed."""
         mock_args.return_value = MagicMock(
             term="15",
+            disable_streaming=False,
             experimental_streaming=True,
             use_streaming_candidate=False,
             promote_streaming=False,
@@ -182,6 +185,7 @@ class TestMainStreaming(unittest.TestCase):
         """Verify that without threshold, strict MATCH is required (Phase 10 behavior kept)."""
         mock_args.return_value = MagicMock(
             term="15",
+            disable_streaming=False,
             experimental_streaming=True,
             use_streaming_candidate=True,
             promote_streaming=False,
@@ -239,6 +243,7 @@ class TestMainStreaming(unittest.TestCase):
         threshold = 0.95
         mock_args.return_value = MagicMock(
             term="15",
+            disable_streaming=False,
             experimental_streaming=True,
             use_streaming_candidate=True,
             promote_streaming=False,
@@ -293,6 +298,7 @@ class TestMainStreaming(unittest.TestCase):
         """Verify fallback when score < threshold."""
         mock_args.return_value = MagicMock(
             term="15",
+            disable_streaming=False,
             experimental_streaming=True,
             use_streaming_candidate=True,
             promote_streaming=False,
@@ -331,6 +337,9 @@ class TestMainStreaming(unittest.TestCase):
         """Verify early exit for threshold outside [0, 1]."""
         mock_args.return_value = MagicMock(
             term="15",
+            disable_streaming=False,
+            experimental_streaming=True,
+            use_streaming_candidate=False,
             promote_streaming=False,
             streaming_confidence_threshold=1.5,
             log_level="INFO",
@@ -362,6 +371,7 @@ class TestMainStreaming(unittest.TestCase):
         """Verify always batch when --use-streaming-candidate is False."""
         mock_args.return_value = MagicMock(
             term="15",
+            disable_streaming=False,
             experimental_streaming=True,
             use_streaming_candidate=False,
             promote_streaming=False,
@@ -424,6 +434,7 @@ class TestMainStreaming(unittest.TestCase):
             state_path="state/bronze.duckdb",
             log_level="INFO",
             headless=True,
+            disable_streaming=False,
             experimental_streaming=True,
             use_streaming_candidate=False,
             promote_streaming=False,
@@ -451,7 +462,8 @@ class TestMainStreaming(unittest.TestCase):
         # Check if validation_run_summary.json was written (it's the second call to json.dump)
         self.assertTrue(mock_json_dump.call_count >= 2, "json.dump should be called at least twice")
         summary = mock_json_dump.call_args_list[1][0][0]
-        self.assertEqual(summary["execution_mode"], "experimental_streaming")
+        self.assertEqual(summary["execution_mode"], "default_streaming_guarded")
+        self.assertEqual(summary["run_mode"], "guarded_default")
         self.assertEqual(summary["term"], "15")
 
     @patch("main.BackupManager")
@@ -488,6 +500,7 @@ class TestMainStreaming(unittest.TestCase):
             state_path="state/bronze.duckdb",
             log_level="INFO",
             headless=True,
+            disable_streaming=False,
             experimental_streaming=True,
             use_streaming_candidate=True,
             promote_streaming=False,
@@ -550,6 +563,7 @@ class TestMainStreaming(unittest.TestCase):
             state_path="state/bronze.duckdb",
             log_level="INFO",
             headless=True,
+            disable_streaming=False,
             experimental_streaming=True,
             use_streaming_candidate=False,
             promote_streaming=False,

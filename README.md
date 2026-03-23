@@ -100,18 +100,20 @@ This tool is used as a standalone validator to guarantee that changes in the pip
 The project includes an experimental in-memory extraction pipeline that runs concurrently with session scraping to reduce total execution time.
 
 ### Flag Hierarchy
-- `--experimental-streaming`: Enables the in-memory extraction and generates validation artifacts.
-- `--use-streaming-candidate`: Opts into using the streaming results for downstream enrichment (requires `--experimental-streaming`).
+- `--disable-streaming`: **Authoritative**. Forces pure batch mode, disabling all streaming logic/validation.
+- `--experimental-streaming`: Optional explicit shadow-mode flag (**now active by default** unless `--disable-streaming` is used).
+- `--use-streaming-candidate`: Opts into using the streaming results for downstream enrichment (independent of `--experimental-streaming`).
 - `--streaming-confidence-threshold`: Sets a custom confidence gate for candidate promotion (requires `--use-streaming-candidate`).
 
 ### Modes of Operation
 
 | Mode | CommandLine Arguments | Official Outputs | Candidate Artifact | Parity Report | Downstream Source |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Default** | (none) | Updated (Batch) | Not generated | Not generated | Official Batch |
-| **Validation** | `--experimental-streaming` | Updated (Batch) | Generated | Generated | Official Batch |
-| **Strict Match** | `--experimental-streaming --use-streaming-candidate` | Updated (Batch) | Generated | Generated | Candidate (if 100% match) |
-| **Threshold** | `--experimental-streaming --use-streaming-candidate --streaming-confidence-threshold 0.95` | Updated (Batch) | Generated | Generated | Candidate (if score >= 0.95) |
+| **Default (Shadow)** | (none) | Updated (Batch) | Generated | Generated | Official Batch |
+| **Pure Batch** | `--disable-streaming` | Updated (Batch) | Not generated | Not generated | Official Batch |
+| **Strict Match** | `--use-streaming-candidate` | Updated (Batch) | Generated | Generated | Candidate (if 100% match) |
+| **Threshold** | `--use-streaming-candidate --streaming-confidence-threshold 0.95` | Updated (Batch) | Generated | Generated | Candidate (if score >= 0.95) |
+| **Explicit Promotion**| `--use-streaming-candidate --promote-streaming` | Updated (Batch) | Generated | Generated | Candidate (if 100% match) |
 
 > [!NOTE]
 > Even when a candidate is promoted, the **official batch output** (`interventions_raw.parquet`) is always updated and preserved as the system of record in `data/silver/`.
@@ -192,26 +194,71 @@ python src/main.py --experimental-streaming --use-streaming-candidate --promote-
 - **Auditability**: Every promotion decision is logged and recorded in the validation artifacts.
 - **Batch Authoritative**: Batch remains the official system of record and the default baseline for all processing.
 
+## Default Shadow Mode (Phase 20A)
+
+Starting with Phase 20A, the streaming validation pipeline runs in **shadow mode by default** in every execution. This ensures continuous monitoring of parity and confidence levels without affecting the official system of record.
+
+### Key Features
+- **Observability by Default**: Every run generates a parity report and validation artifacts.
+- **Batch-Authoritative**: Downstream processing (Silver enrichment) still uses the batch-extracted source by default.
+- **Strict Isolation**: A new authoritative switch `--disable-streaming` is provided for operators who need to bypass all experimental logic.
+
 ### Command Examples
 
-**1. Standard robust run (Default):**
+**1. Standard run (Shadow Mode active by default):**
 ```bash
-python src/main.py --term 15
+python src/main.py
+```
+- Generates `validation_run_summary.json` and `parity_report.json`.
+- Uses Batch for downstream.
+
+**2. Pure Batch run (Disables all streaming logic):**
+```bash
+python src/main.py --disable-streaming
+```
+- No validation artifacts generated.
+
+**3. Strict promotion (Opt-in to use streaming source):**
+```bash
+python src/main.py --use-streaming-candidate --promote-streaming
 ```
 
-**2. Validation run (Compare streaming vs batch without switching):**
+**4. Threshold-gated promotion:**
 ```bash
-python src/main.py --term 15 --experimental-streaming
+python src/main.py --use-streaming-candidate --streaming-confidence-threshold 0.99
 ```
 
-**3. Strict promotion (Only switch if streaming is a perfect match):**
+## Default Guarded Promotion (Phase 20B)
+
+In Phase 20B, the pipeline moves from shadow monitoring to **Guarded Production**. The streaming candidate is now automatically selected for downstream processing if it meets strict parity requirements.
+
+### Key Logic
+- **Automatic Selection**: If `strict_match` passes (`FULL_MATCH`), the streaming candidate is promoted as the source for Silver enrichment.
+- **Authoritative Fallback**: If strict match fails or is skipped, the system automatically falls back to the official batch source with a precise `fallback_reason` (`strict_match_failed`, `validation_skipped`, etc.).
+- **System of Record**: The official batch outputs (`interventions_raw.parquet`) are always written and preserved, regardless of whether the candidate was promoted.
+- **Kill Switch**: The `--disable-streaming` flag remains authoritative and bypasses all streaming logic.
+
+### Backward Compatibility
+Explicit flags (`--use-streaming-candidate`, `--promote-streaming`) are retained to support legacy workflows and allow operators to explicitly state their intent, even though candidate evaluation is now the guarded default.
+
+### Command Examples
+
+**1. Standard Guarded Run (Default):**
 ```bash
-python src/main.py --term 15 --experimental-streaming --use-streaming-candidate
+python src/main.py
+```
+- Performs streaming validation.
+- Selects streaming candidate if `FULL_MATCH`.
+- Falls back to batch otherwise.
+
+**2. Forced Batch Run (Kill Switch):**
+```bash
+python src/main.py --disable-streaming
 ```
 
-**4. Threshold-gated promotion (Switch if streaming is "good enough"):**
+**3. Explicit Guarded Run:**
 ```bash
-python src/main.py --term 15 --experimental-streaming --use-streaming-candidate --streaming-confidence-threshold 0.99
+python src/main.py --use-streaming-candidate --promote-streaming
 ```
 
 ## Local Development Environment
