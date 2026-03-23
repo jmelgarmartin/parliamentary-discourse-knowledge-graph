@@ -126,6 +126,37 @@ The project includes an experimental in-memory extraction pipeline that runs con
 - **Streaming Candidate**: `data/validation/legislature={term}/interventions_streaming_candidate.parquet`
   - The dataset produced by the experimental pipeline.
 
+## Streaming Promotion Readiness
+
+### Validation Status
+- sandbox full reprocess completed
+- FULL_MATCH achieved
+- confidence_score = 1.0
+- no mismatched documents
+
+### Recommended Policy
+- recommended mode: strict_match
+- threshold mode: optional / experimental
+- batch remains system of record
+
+### Promotion Criteria
+- strict match parity
+- row/document/global equality
+- no fallback triggered in validated scenarios
+
+### Fallback & Safety Model
+- batch remains authoritative
+- any mismatch falls back to batch
+- no destructive changes introduced
+
+### Decision Outcome
+- Streaming candidate: VALIDATED
+- Recommended policy: strict_match
+- Default production path: batch (unchanged)
+- Promotion status: pending controlled rollout
+
+Streaming is validated but not yet promoted as the default system of record.
+
 ### Command Examples
 
 **1. Standard robust run (Default):**

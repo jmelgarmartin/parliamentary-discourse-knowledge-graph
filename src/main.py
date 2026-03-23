@@ -76,8 +76,9 @@ def main() -> None:
         "--use-streaming-candidate",
         action="store_true",
         help=(
-            "Use streaming candidate as downstream source for enrichment "
-            "(requires --experimental-streaming; subject to parity matching)"
+            "Enable the streaming candidate path. "
+            "strict_match has been validated to achieve FULL_MATCH parity in sandbox reprocess. "
+            "batch remains the official system of record."
         ),
     )
     parser.add_argument(
