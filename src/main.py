@@ -68,8 +68,8 @@ def main() -> None:
         "--experimental-streaming",
         action="store_true",
         help=(
-            "Enable experimental in-memory streaming extraction during session scraping"
-            " (generates validation artifacts)"
+            "Enable experimental in-memory streaming extraction "
+            "in shadow mode (generates validation artifacts, no output changes)"
         ),
     )
     parser.add_argument(
@@ -455,9 +455,17 @@ def main() -> None:
         with open(report_file, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=4)
 
-        # --- Phase 14: Operational Summary & History ---
+        # --- Phase 14 & 16: Operational Summary & History ---
+        if args.streaming_confidence_threshold is not None:
+            run_mode = "threshold_evaluation"
+        elif args.use_streaming_candidate:
+            run_mode = "candidate_evaluation"
+        else:
+            run_mode = "shadow"
+
         summary = {
             "term": args.term,
+            "run_mode": run_mode,
             "execution_mode": "experimental_streaming",
             "selection_policy": selection_policy,
             "candidate_selected": bool(selected_source),
@@ -498,14 +506,9 @@ def main() -> None:
             )
 
         # Concise operational summary log
-        policy_str = (
-            f"{selection_policy}({args.streaming_confidence_threshold})"
-            if selection_policy == "confidence_threshold"
-            else selection_policy
-        )
         source_label = "streaming_candidate_source" if selected_source else "official_batch_source"
         logger.info(
-            f"Streaming validation run summary | policy={policy_str}"
+            f"Streaming validation summary | policy={selection_policy}"
             f" | selected={source_label} | confidence={confidence_score:.4f}"
             f" | docs={docs_compared} | mismatches={len(mismatched_docs)}"
         )

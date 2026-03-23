@@ -157,6 +157,23 @@ The project includes an experimental in-memory extraction pipeline that runs con
 
 Streaming is validated but not yet promoted as the default system of record.
 
+## Controlled Rollout (Phase 16)
+
+### Shadow Mode
+- streaming runs in parallel with batch (via `--experimental-streaming`)
+- does NOT affect downstream outputs
+- generates validation artifacts
+
+### When to use it
+- production monitoring
+- confidence tracking
+- regression detection
+
+### Guarantees
+- zero risk to official datasets
+- full fallback always active
+- no behavior change
+
 ### Command Examples
 
 **1. Standard robust run (Default):**
