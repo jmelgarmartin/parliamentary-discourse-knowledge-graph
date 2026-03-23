@@ -8,14 +8,14 @@ import os
 import pathlib
 import sys
 import time
-from typing import Optional
+from datetime import datetime
+from typing import Any, Dict, List
 
 import pandas as pd
 from congress_analysis.backup_manager import BackupManager
 
 # Allow execution of main.py within the src/ directory path context.
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
 
 from congress_analysis.ingestion.scrappers.deputies_scraper import DeputiesScraper  # noqa: E402
 from congress_analysis.ingestion.scrappers.groups_scraper import GroupsScraper  # noqa: E402
@@ -32,10 +32,8 @@ def setup_logging(process_name: str, log_level: str = "INFO") -> None:
     for handler in handlers:
         logging.root.removeHandler(handler)
 
-    import datetime
-
     # Format: YYYY-MM-DD_HHMM followed by the process name (e.g., 2026-03-03_1652_pipeline_execution.log)
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M")
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M")
     log_filename = f"{timestamp}_{process_name}.log"
 
     numeric_level = getattr(logging, log_level.upper(), logging.INFO)
@@ -99,6 +97,19 @@ def main() -> None:
         default=None,
         help="Confidence threshold [0.0, 1.0] to promote streaming candidate (requires --use-streaming-candidate)",
     )
+    parser.add_argument(
+        "--batch-strategy",
+        choices=["always", "sampled", "disabled_only_if_stable"],
+        default="always",
+        help="Strategy for batch execution (always, sampled, or disabled_only_if_stable).",
+    )
+    parser.add_argument(
+        "--batch-sample-every",
+        type=int,
+        default=5,
+        help="Run batch every Nth execution when strategy is 'sampled' (default: 5).",
+    )
+
     args = parser.parse_args()
 
     setup_logging("pipeline_execution", log_level=args.log_level)
@@ -138,6 +149,87 @@ def main() -> None:
 
     if default_streaming_active:
         logger.info("Streaming default guarded mode active | automatic promotion enabled | strict_match required")
+
+    # --- Phase 22A: Batch Sampling Strategy (Hardened) ---
+    batch_strategy = args.batch_strategy
+    batch_sample_every = args.batch_sample_every
+    run_batch = True
+    batch_skip_reason = None
+    stable_streaming = False
+    total_runs_history = 0
+    summary_valid = False
+
+    # Output variables initialization (Safety/Observability)
+    selected_source = None
+    promotion_result = "SKIPPED"
+    fallback_reason = None
+    confidence_level = "SKIPPED"
+    confidence_score = 0.0
+    parity_status = "SKIPPED"
+    doc_level_parity = "SKIPPED"
+    row_level_parity = "SKIPPED"
+    docs_compared = 0
+    mismatched_docs: List[Dict[str, Any]] = []
+    confidence_metrics = {
+        "global_match_ratio": 0.0,
+        "document_match_ratio": 0.0,
+        "row_identity_match_ratio": 0.0,
+        "confidence_score": 0.0,
+        "confidence_level": "SKIPPED",
+    }
+    selection_policy = "none"
+    skip_reason = None
+    promotion_attempted = False
+    execution_mode = "default_shadow" if default_streaming_active else "batch_only"
+    if args.disable_streaming:
+        execution_mode = "batch_only"
+
+    # Try to load stability context with robust fallback
+    summary_path = pathlib.Path("data/validation/promotion_monitoring_summary.json")
+    if summary_path.exists():
+        try:
+            import json
+
+            with open(summary_path, "r", encoding="utf-8") as f:
+                content = f.read()
+                if content and isinstance(content, str) and content.strip().startswith("{"):
+                    summary_data = json.loads(content)
+                    if "stability_metrics" in summary_data and "overall_counts" in summary_data:
+                        stable_streaming = summary_data["stability_metrics"].get("stable_streaming")
+                        total_runs_history = summary_data["overall_counts"].get("total_runs")
+
+                        if stable_streaming is not None and total_runs_history is not None:
+                            summary_valid = True
+        except Exception as e:
+            logger.warning(f"Malformed or invalid stability summary: {e}")
+
+    # Decision Logic
+    if not summary_valid and batch_strategy != "always":
+        run_batch = True
+        batch_skip_reason = "missing_or_invalid_summary_fallback"
+    elif batch_strategy == "always":
+        run_batch = True
+        batch_skip_reason = "always_run"
+    elif batch_strategy == "disabled_only_if_stable":
+        if stable_streaming:
+            run_batch = False
+            batch_skip_reason = "stable_streaming"
+        else:
+            run_batch = True
+            batch_skip_reason = "not_stable"
+    elif batch_strategy == "sampled":
+        # Deterministic sampling based on history count (Hardened)
+        if (total_runs_history + 1) % batch_sample_every == 0:
+            run_batch = True
+            batch_skip_reason = "sample_selected"
+        else:
+            run_batch = False
+            batch_skip_reason = "sample_not_selected"
+
+    logger.info(
+        f"Batch decision | strategy={batch_strategy} | executed={str(run_batch).lower()} | "
+        f"reason={batch_skip_reason or 'always_run'}"
+    )
 
     # --- PHASE 0: Pre-execution Backup ---
     logger.info(">>> phase 0: pre-execution backup")
@@ -294,7 +386,9 @@ def main() -> None:
     num_extracted = 0
     df_ext = pd.DataFrame()
 
-    if new_files:
+    if not run_batch:
+        logger.info(f"Skipping batch extraction per strategy: {batch_strategy} (reason: {batch_skip_reason})")
+    elif new_files:
         logger.info(f"New files detected ({len(new_files)}). Starting incremental extraction...")
         extractor = InterventionsExtractor(args.term)
         df_ext = extractor.run(file_list=new_files)
@@ -303,103 +397,109 @@ def main() -> None:
         logger.info("No new session files detected. Skipping interventions extraction.")
     t1_ext = time.time()
 
-    # --- Default downstream source selection (Batch) ---
+    # --- Default downstream source selection logic (Phase 20B/22A) ---
     batch_interventions_path = (
         pathlib.Path("data/silver/interventions") / f"legislature={args.term}" / "interventions_raw.parquet"
     )
-    selected_source: Optional[str] = None
-    selection_policy: str = "batch_only"
 
-    # Parity statuses for reporting
-    parity_status = "NOT_RUN"
-    doc_level_parity = "NOT_RUN"
-    row_level_parity = "NOT_RUN"
-    confidence_metrics = {}
-    fallback_reason: Optional[str] = None
+    # Output variables initialization (Safety/Observability)
+    selected_source = None
+    selection_policy = "none"
+    promotion_result = "SKIPPED"
+    fallback_reason = None
+    confidence_level = "SKIPPED"
+    confidence_score = 0.0
+    parity_status = "SKIPPED"
+    doc_level_parity = "SKIPPED"
+    row_level_parity = "SKIPPED"
+    docs_compared = 0
+    matched_rows_count = 0
+    total_rows_union_count = 0
+    mismatched_docs = []
+
+    confidence_metrics = {
+        "global_match_ratio": 0.0,
+        "document_match_ratio": 0.0,
+        "row_identity_match_ratio": 0.0,
+        "confidence_score": 0.0,
+        "confidence_level": "SKIPPED",
+    }
+    skip_reason = None
+    promotion_attempted = False
+    execution_mode = "default_shadow" if default_streaming_active else "shadow"
+
+    if args.disable_streaming:
+        execution_mode = "batch_only"
 
     # --- PHASE 7: Experimental Streaming Validation ---
-    if experimental_streaming:
-        logger.info(">>> phase 7: experimental streaming validation")
+    if experimental_streaming or default_streaming_active:
         import json
 
         val_dir = pathlib.Path(f"data/validation/legislature={args.term}")
         val_dir.mkdir(parents=True, exist_ok=True)
         streaming_candidate_path = val_dir / "interventions_streaming_candidate.parquet"
 
-        streaming_count = 0
-        batch_subset_count = 0
-        mismatched_docs = []
-        docs_compared = 0
-        matched_rows_count = 0
-        total_rows_union_count = 0
-        skip_reason = None
-
-        if not new_files:
+        if not run_batch:
             parity_status = "SKIPPED"
             doc_level_parity = "SKIPPED"
             row_level_parity = "SKIPPED"
+            confidence_level = "SKIPPED"
+            skip_reason = "batch_skipped"
+            logger.info("Skipping parity validation because batch execution was skipped by strategy.")
+        elif not new_files:
+            parity_status = "SKIPPED"
+            doc_level_parity = "SKIPPED"
+            row_level_parity = "SKIPPED"
+            confidence_level = "SKIPPED"
             skip_reason = "no_new_files"
             logger.info("Parity validation SKIPPED: no new session files were processed in this run.")
-        else:
-            if streaming_records:
-                streaming_df = pd.DataFrame(streaming_records)
-                sort_cols = ["document_id", "intervention_order"]
-                if all(c in streaming_df.columns for c in sort_cols):
-                    streaming_df.sort_values(sort_cols, inplace=True)
+        elif streaming_records:
+            logger.info(">>> phase 7: experimental streaming validation")
+            streaming_df = pd.DataFrame(streaming_records)
+            sort_cols = ["document_id", "intervention_order"]
+            if all(c in streaming_df.columns for c in sort_cols):
+                streaming_df.sort_values(sort_cols, inplace=True)
 
-                streaming_df.to_parquet(streaming_candidate_path, index=False)
-                logger.info(f"Saved {len(streaming_df)} streaming-extracted records to {streaming_candidate_path}")
-                streaming_count = len(streaming_df)
+            streaming_df.to_parquet(streaming_candidate_path, index=False)
+            logger.info(f"Saved {len(streaming_df)} streaming-extracted records to {streaming_candidate_path}")
+            streaming_count = len(streaming_df)
 
-                processed_doc_ids = set(streaming_df["document_id"].unique())
-                batch_subset_df = df_ext[df_ext["document_id"].isin(processed_doc_ids)]
-                batch_subset_count = len(batch_subset_df)
-                parity_status = "MATCH" if streaming_count == batch_subset_count else "MISMATCH"
+            processed_doc_ids = set(streaming_df["document_id"].unique())
+            batch_subset_df = df_ext[df_ext["document_id"].isin(processed_doc_ids)]
+            batch_subset_count = len(batch_subset_df)
+            parity_status = "MATCH" if streaming_count == batch_subset_count else "MISMATCH"
 
-                st_counts = streaming_df.groupby("document_id").size().to_dict()
-                bt_counts = batch_subset_df.groupby("document_id").size().to_dict()
-                all_docs = set(st_counts.keys()) | set(bt_counts.keys())
-                docs_compared = len(all_docs)
+            st_counts = streaming_df.groupby("document_id").size().to_dict()
+            bt_counts = batch_subset_df.groupby("document_id").size().to_dict()
+            all_docs = set(st_counts.keys()) | set(bt_counts.keys())
+            docs_compared = len(all_docs)
 
-                row_level_parity = "MATCH"
-                for doc_id in all_docs:
-                    s_df_doc = streaming_df[streaming_df["document_id"] == doc_id]
-                    b_df_doc = batch_subset_df[batch_subset_df["document_id"] == doc_id]
-                    s_ids = set(s_df_doc["intervention_id"])
-                    b_ids = set(b_df_doc["intervention_id"])
+            row_level_parity = "MATCH"
+            for doc_id in all_docs:
+                s_df_doc = streaming_df[streaming_df["document_id"] == doc_id]
+                b_df_doc = batch_subset_df[batch_subset_df["document_id"] == doc_id]
+                s_ids = set(s_df_doc["intervention_id"])
+                b_ids = set(b_df_doc["intervention_id"])
 
-                    matched_rows_count += len(s_ids & b_ids)
-                    total_rows_union_count += len(s_ids | b_ids)
+                matched_rows_count += len(s_ids & b_ids)
+                total_rows_union_count += len(s_ids | b_ids)
 
-                    if s_ids != b_ids:
-                        mismatched_docs.append(
-                            {
-                                "document_id": doc_id,
-                                "streaming_count": len(s_ids),
-                                "batch_count": len(b_ids),
-                                "diagnosis": {
-                                    "missing_row_keys_sample": list(b_ids - s_ids)[:5],
-                                    "extra_row_keys_sample": list(s_ids - b_ids)[:5],
-                                },
-                            }
-                        )
-                        row_level_parity = "MISMATCH"
-                doc_level_parity = "MATCH" if not mismatched_docs else "MISMATCH"
-            else:
-                logger.warning("No streaming records collected despite new files being processed.")
-                parity_status = "MISMATCH"
-                doc_level_parity = "MISMATCH"
-                row_level_parity = "MISMATCH"
-                skip_reason = "empty_streaming_records"
+                if s_ids != b_ids:
+                    mismatched_docs.append(
+                        {
+                            "document_id": doc_id,
+                            "streaming_count": len(s_ids),
+                            "batch_count": len(b_ids),
+                            "diagnosis": {
+                                "missing_row_keys_sample": list(b_ids - s_ids)[:5],
+                                "extra_row_keys_sample": list(s_ids - b_ids)[:5],
+                            },
+                        }
+                    )
+                    row_level_parity = "MISMATCH"
+            doc_level_parity = "MATCH" if not mismatched_docs else "MISMATCH"
 
-        # Quantitative Metrics & Confidence Mapping
-        if parity_status == "SKIPPED":
-            confidence_score = 0.0
-            confidence_level = "SKIPPED"
-            global_match_ratio = 0.0
-            document_match_ratio = 0.0
-            row_identity_match_ratio = 0.0
-        else:
+            # Confidence metrics
             global_match_ratio = 1.0 if parity_status == "MATCH" else 0.0
             document_match_ratio = (docs_compared - len(mismatched_docs)) / docs_compared if docs_compared > 0 else 1.0
             row_identity_match_ratio = (
@@ -416,22 +516,22 @@ def main() -> None:
             else:
                 confidence_level = "LOW_CONFIDENCE"
 
-        confidence_metrics = {
-            "global_match_ratio": round(global_match_ratio, 4),
-            "document_match_ratio": round(document_match_ratio, 4),
-            "row_identity_match_ratio": round(row_identity_match_ratio, 4),
-            "confidence_score": round(confidence_score, 4),
-            "confidence_level": confidence_level,
-        }
+            confidence_metrics = {
+                "global_match_ratio": round(global_match_ratio, 4),
+                "document_match_ratio": round(document_match_ratio, 4),
+                "row_identity_match_ratio": round(row_identity_match_ratio, 4),
+                "confidence_score": round(confidence_score, 4),
+                "confidence_level": confidence_level,
+            }
+        else:
+            logger.warning("No streaming records collected despite new files being processed.")
+            parity_status = "MISMATCH"
+            doc_level_parity = "MISMATCH"
+            row_level_parity = "MISMATCH"
+            skip_reason = "empty_streaming_records"
 
-        # --- Phase 10, 11, 12, 17 & 20B: Parity Validation & Source Selection ---
-        selected_source = None
-        selection_policy = "batch_only"
-        fallback_reason = None
+        # Selection Logic
         promotion_attempted = True
-        promotion_result = "NOT_ATTEMPTED"
-        execution_mode = "default_streaming_guarded" if default_streaming_active else "shadow"
-
         if args.promote_streaming or args.use_streaming_candidate or default_streaming_active:
             if args.streaming_confidence_threshold is None:
                 selection_policy = "strict_match"
@@ -447,7 +547,6 @@ def main() -> None:
                         fallback_reason = "candidate_missing"
                     else:
                         fallback_reason = "strict_match_failed"
-
                     logger.info(
                         f"Streaming guarded mode | strict_match=FAIL → fallback to batch | reason={fallback_reason}"
                     )
@@ -456,63 +555,46 @@ def main() -> None:
                 threshold = args.streaming_confidence_threshold
                 if confidence_level == "SKIPPED":
                     fallback_reason = "validation_skipped"
-                    logger.info(
-                        "Falling back to official batch source | "
-                        f"policy=confidence_threshold | reason={fallback_reason}"
-                    )
                 elif not streaming_candidate_path.exists():
                     fallback_reason = "candidate_missing"
-                    logger.info(
-                        "Falling back to official batch source | "
-                        f"policy=confidence_threshold | reason={fallback_reason}"
-                    )
                 elif confidence_score >= threshold:
                     selected_source = str(streaming_candidate_path)
                     promotion_result = "PROMOTED"
-                    logger.info(
-                        f"Streaming candidate promoted | policy=confidence_threshold"
-                        f" | confidence={confidence_score:.4f} >= threshold={threshold:.4f}"
-                    )
                 else:
                     fallback_reason = "confidence_below_threshold"
                     promotion_result = "FALLBACK"
-                    logger.info(
-                        f"Falling back to official batch source | policy=confidence_threshold"
-                        f" | confidence={confidence_score:.4f} < threshold={threshold:.4f}"
-                        f" | reason={fallback_reason}"
-                    )
-        else:
-            selection_policy = "batch_only"
-            logger.info("Using official batch source | policy=batch_only")
 
-        # Create parity report (updated with final decision and metadata)
+                if promotion_result == "FALLBACK":
+                    logger.info(
+                        f"Falling back to official batch source | policy=confidence_threshold | "
+                        f"reason={fallback_reason}"
+                    )
+                else:
+                    logger.info(
+                        f"Streaming candidate promoted | policy=confidence_threshold | "
+                        f"confidence={confidence_score:.4f}"
+                    )
+
+        # Final Report & Summary
         report = {
             "legislature": args.term,
-            "timestamp": pd.Timestamp.now().isoformat(),
+            "timestamp": datetime.now().isoformat(),
             "policy_used": selection_policy,
             "selected_source": selected_source or "OFFICIAL_BATCH",
             "parity_status": parity_status,
             "document_level_parity": doc_level_parity,
             "row_level_parity": row_level_parity,
-            "streaming_count": streaming_count,
-            "batch_subset_count": batch_subset_count,
             "docs_compared": docs_compared,
-            "matched_documents": docs_compared - len(mismatched_docs),
-            "total_rows_considered": total_rows_union_count,
-            "matched_rows": matched_rows_count,
             "mismatched_documents": mismatched_docs,
         }
         report.update(confidence_metrics)
         if skip_reason:
             report["skip_reason"] = skip_reason
-        if args.streaming_confidence_threshold is not None:
-            report["streaming_confidence_threshold"] = args.streaming_confidence_threshold
 
         report_file = val_dir / "parity_report.json"
         with open(report_file, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=4)
 
-        # --- Phase 14, 16, 17 & 20A: Operational Summary & History ---
         if args.streaming_confidence_threshold is not None:
             run_mode = "threshold_evaluation"
         elif args.promote_streaming:
@@ -521,9 +603,6 @@ def main() -> None:
             run_mode = "candidate_evaluation"
         else:
             run_mode = "guarded_default"
-
-        if args.disable_streaming:
-            execution_mode = "batch_only"
 
         summary = {
             "term": args.term,
@@ -538,19 +617,21 @@ def main() -> None:
             "parity_status": parity_status,
             "document_level_parity": doc_level_parity,
             "row_level_parity": row_level_parity,
-            "confidence_score": confidence_metrics.get("confidence_score", 0.0),
-            "confidence_level": confidence_metrics.get("confidence_level", "SKIPPED"),
+            "confidence_score": confidence_score,
+            "confidence_level": confidence_level,
             "docs_compared": docs_compared,
             "mismatched_document_count": len(mismatched_docs),
             "fallback_reason": fallback_reason,
-            "timestamp": pd.Timestamp.now().isoformat(),
+            "batch_strategy": batch_strategy,
+            "batch_executed": run_batch,
+            "batch_skip_reason": batch_skip_reason,
+            "timestamp": datetime.now().isoformat(),
         }
 
         summary_file = val_dir / "validation_run_summary.json"
         with open(summary_file, "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=4)
 
-        # Best-effort append-only history log
         try:
             history_file = pathlib.Path("data/validation/validation_run_history.jsonl")
             history_file.parent.mkdir(parents=True, exist_ok=True)
@@ -558,25 +639,6 @@ def main() -> None:
                 f.write(json.dumps(summary) + "\n")
         except Exception as e:
             logger.warning(f"Failed to append validation run history: {e}")
-
-        if parity_status == "SKIPPED":
-            logger.info(f"Parity report: SKIPPED ({skip_reason}). Report saved to {report_file}")
-            logger.info(f"Validation summary: SKIPPED | reason={skip_reason}")
-        else:
-            logger.info(
-                f"Validation summary: {confidence_level}"
-                f" | confidence={confidence_score:.4f}"
-                f" | docs={docs_compared - len(mismatched_docs)}/{docs_compared}"
-                f" | rows={matched_rows_count}/{total_rows_union_count}"
-            )
-
-        # Concise operational summary log
-        source_label = "streaming_candidate_source" if selected_source else "official_batch_source"
-        logger.info(
-            f"Streaming validation summary | policy={selection_policy}"
-            f" | selected={source_label} | confidence={confidence_score:.4f}"
-            f" | docs={docs_compared} | mismatches={len(mismatched_docs)}"
-        )
     else:
         logger.info("Using official batch source | policy=batch_only")
 

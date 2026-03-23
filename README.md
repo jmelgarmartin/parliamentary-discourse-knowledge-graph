@@ -234,7 +234,24 @@ In Phase 20B, the pipeline moves from shadow monitoring to **Guarded Production*
 
 ### Key Logic
 - **Automatic Selection**: If `strict_match` passes (`FULL_MATCH`), the streaming candidate is promoted as the source for Silver enrichment.
-- **Authoritative Fallback**: If strict match fails or is skipped, the system automatically falls back to the official batch source with a precise `fallback_reason` (`strict_match_failed`, `validation_skipped`, etc.).
+- **Authoritative Fallback**: If strict match fails or is skipped, the system automatically falls back to the official batch source with a precise- `fallback_reason`: "strict_match_failed", "validation_skipped", "candidate_missing".
+
+### Batch Sampling Strategy (Phase 22A)
+
+To optimize execution while maintaining safety, the pipeline supports conditional batch execution:
+- `--batch-strategy always`: (Default) Batch runs on every execution.
+- `--batch-strategy sampled`: Runs batch every Nth execution, where N is set by `--batch-sample-every` (default: 5). The rule is `(total_runs + 1) % N == 0`.
+- `--batch-strategy disabled_only_if_stable`: Skips batch only if `stable_streaming` is `True` in `promotion_monitoring_summary.json`.
+
+**Safety Features**:
+- **Authoritative Fallback**: If the monitoring summary is missing or malformed, the system defaults to `run_batch=True`.
+- **Validation Gating**: If batch is skipped, `parity_status` is explicitly set to `SKIPPED` and the run is not counted as evaluable for stability metrics.
+- **Kill Switch**: `--disable-streaming` remains authoritative and disables all streaming logic.
+
+### Safety Guarantees
+- **Reversibility**: Use `--batch-strategy always` to force batch execution and full parity validation at any time.
+- **Observability**: When batch is skipped, `validation_run_summary.json` records `batch_executed: false` and the specific `batch_skip_reason`.
+- **Gated Skipping**: Batch cannot be skipped if recent pipeline history shows any parity failures.
 - **System of Record**: The official batch outputs (`interventions_raw.parquet`) are always written and preserved, regardless of whether the candidate was promoted.
 - **Kill Switch**: The `--disable-streaming` flag remains authoritative and bypasses all streaming logic.
 
