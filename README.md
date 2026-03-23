@@ -174,6 +174,24 @@ Streaming is validated but not yet promoted as the default system of record.
 - full fallback always active
 - no behavior change
 
+## Controlled Promotion (Phase 17)
+
+### Explicit Promotion
+Streaming is promoted to the downstream source for a specific run only when:
+1. `--promote-streaming` is explicitly enabled.
+2. Strict match parity (`strict_match`) is successfully achieved.
+
+### How to activate it
+```bash
+python src/main.py --experimental-streaming --use-streaming-candidate --promote-streaming
+```
+
+### Guarantees
+- **Safe Fallback**: If strict match fails, the pipeline automatically falls back to the authoritative batch source.
+- **No Data Corruption**: Promotion only affects source selection; official output paths and schemas remain unchanged.
+- **Auditability**: Every promotion decision is logged and recorded in the validation artifacts.
+- **Batch Authoritative**: Batch remains the official system of record and the default baseline for all processing.
+
 ### Command Examples
 
 **1. Standard robust run (Default):**

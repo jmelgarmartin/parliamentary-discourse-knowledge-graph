@@ -76,9 +76,17 @@ def main() -> None:
         "--use-streaming-candidate",
         action="store_true",
         help=(
-            "Enable the streaming candidate path. "
+            "Enable evaluation of the streaming candidate path. "
             "strict_match has been validated to achieve FULL_MATCH parity in sandbox reprocess. "
             "batch remains the official system of record."
+        ),
+    )
+    parser.add_argument(
+        "--promote-streaming",
+        action="store_true",
+        help=(
+            "Explicitly promotes streaming candidate to downstream processing if validation passes "
+            "(strict_match required). Falls back to batch otherwise."
         ),
     )
     parser.add_argument(
@@ -97,6 +105,15 @@ def main() -> None:
             logger.error(
                 f"Invalid streaming confidence threshold: {args.streaming_confidence_threshold}. Must be in [0.0, 1.0]."
             )
+            sys.exit(1)
+
+    # --- CLI Validation for Promotion ---
+    if args.promote_streaming:
+        if not (args.experimental_streaming and args.use_streaming_candidate):
+            logger.error("--promote-streaming requires --experimental-streaming and --use-streaming-candidate")
+            sys.exit(1)
+        if args.streaming_confidence_threshold is not None:
+            logger.error("--promote-streaming is incompatible with --streaming-confidence-threshold")
             sys.exit(1)
 
     # --- PHASE 0: Pre-execution Backup ---
@@ -385,14 +402,27 @@ def main() -> None:
         }
 
         # --- Decision Hierarchy for Downstream Source ---
+        promotion_attempted = args.promote_streaming
+        promotion_result = "NOT_ATTEMPTED"
+
         if args.use_streaming_candidate:
             if args.streaming_confidence_threshold is None:
                 selection_policy = "strict_match"
-                if parity_status == "MATCH" and doc_level_parity == "MATCH" and row_level_parity == "MATCH":
+                strict_match_passed = (
+                    parity_status == "MATCH" and doc_level_parity == "MATCH" and row_level_parity == "MATCH"
+                )
+
+                if strict_match_passed:
                     selected_source = str(streaming_candidate_path)
+                    if promotion_attempted:
+                        promotion_result = "PROMOTED"
+                        logger.info("Streaming promotion | status=PROMOTED | policy=strict_match")
                     logger.info("Streaming candidate source selected | policy=strict_match | status=MATCH")
                 else:
                     fallback_reason = "strict_match_failed"
+                    if promotion_attempted:
+                        promotion_result = "FALLBACK"
+                        logger.info(f"Streaming promotion | status=FALLBACK | reason={fallback_reason}")
                     logger.info(
                         f"Falling back to official batch source | policy=strict_match | reason={fallback_reason}"
                     )
@@ -455,7 +485,7 @@ def main() -> None:
         with open(report_file, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=4)
 
-        # --- Phase 14 & 16: Operational Summary & History ---
+        # --- Phase 14, 16 & 17: Operational Summary & History ---
         if args.streaming_confidence_threshold is not None:
             run_mode = "threshold_evaluation"
         elif args.use_streaming_candidate:
@@ -466,6 +496,8 @@ def main() -> None:
         summary = {
             "term": args.term,
             "run_mode": run_mode,
+            "promotion_attempted": promotion_attempted,
+            "promotion_result": promotion_result,
             "execution_mode": "experimental_streaming",
             "selection_policy": selection_policy,
             "candidate_selected": bool(selected_source),

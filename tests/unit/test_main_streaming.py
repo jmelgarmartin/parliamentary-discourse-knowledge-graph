@@ -51,6 +51,7 @@ class TestMainStreaming(unittest.TestCase):
             term="15",
             experimental_streaming=True,
             use_streaming_candidate=False,
+            promote_streaming=False,
             streaming_confidence_threshold=None,
             log_level="INFO",
             headless=True,
@@ -96,6 +97,7 @@ class TestMainStreaming(unittest.TestCase):
             term="15",
             experimental_streaming=True,
             use_streaming_candidate=False,
+            promote_streaming=False,
             streaming_confidence_threshold=None,
             log_level="INFO",
             headless=True,
@@ -138,6 +140,7 @@ class TestMainStreaming(unittest.TestCase):
             term="15",
             experimental_streaming=True,
             use_streaming_candidate=False,
+            promote_streaming=False,
             streaming_confidence_threshold=None,
             log_level="INFO",
             headless=True,
@@ -181,6 +184,7 @@ class TestMainStreaming(unittest.TestCase):
             term="15",
             experimental_streaming=True,
             use_streaming_candidate=True,
+            promote_streaming=False,
             streaming_confidence_threshold=None,
             log_level="INFO",
             headless=True,
@@ -237,6 +241,7 @@ class TestMainStreaming(unittest.TestCase):
             term="15",
             experimental_streaming=True,
             use_streaming_candidate=True,
+            promote_streaming=False,
             streaming_confidence_threshold=threshold,
             log_level="INFO",
             headless=True,
@@ -290,6 +295,7 @@ class TestMainStreaming(unittest.TestCase):
             term="15",
             experimental_streaming=True,
             use_streaming_candidate=True,
+            promote_streaming=False,
             streaming_confidence_threshold=0.99,
             log_level="INFO",
             headless=True,
@@ -325,6 +331,7 @@ class TestMainStreaming(unittest.TestCase):
         """Verify early exit for threshold outside [0, 1]."""
         mock_args.return_value = MagicMock(
             term="15",
+            promote_streaming=False,
             streaming_confidence_threshold=1.5,
             log_level="INFO",
             headless=True,
@@ -357,6 +364,7 @@ class TestMainStreaming(unittest.TestCase):
             term="15",
             experimental_streaming=True,
             use_streaming_candidate=False,
+            promote_streaming=False,
             streaming_confidence_threshold=None,
             log_level="INFO",
             headless=True,
@@ -418,6 +426,7 @@ class TestMainStreaming(unittest.TestCase):
             headless=True,
             experimental_streaming=True,
             use_streaming_candidate=False,
+            promote_streaming=False,
             streaming_confidence_threshold=None,
         )
 
@@ -481,6 +490,7 @@ class TestMainStreaming(unittest.TestCase):
             headless=True,
             experimental_streaming=True,
             use_streaming_candidate=True,
+            promote_streaming=False,
             streaming_confidence_threshold=0.9,
         )
 
@@ -542,6 +552,7 @@ class TestMainStreaming(unittest.TestCase):
             headless=True,
             experimental_streaming=True,
             use_streaming_candidate=False,
+            promote_streaming=False,
             streaming_confidence_threshold=None,
         )
 
