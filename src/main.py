@@ -60,6 +60,11 @@ def main() -> None:
         help="Set the logging level (default: INFO)",
     )
     parser.add_argument(
+        "--allow-inferred-promotion",
+        action="store_true",
+        help="Allow promotion based on streaming-only validation",
+    )
+    parser.add_argument(
         "--no-headless", action="store_false", dest="headless", help="Run browser in non-headless mode (visible GUI)"
     )
     parser.add_argument(
@@ -99,9 +104,15 @@ def main() -> None:
     )
     parser.add_argument(
         "--batch-strategy",
-        choices=["always", "sampled", "disabled_only_if_stable"],
+        choices=["always", "sampled", "disabled_only_if_stable", "adaptive"],
         default="always",
-        help="Strategy for batch execution (always, sampled, or disabled_only_if_stable).",
+        help="Strategy for batch execution (always, sampled, disabled_only_if_stable, or adaptive).",
+    )
+    parser.add_argument(
+        "--batch-freshness-window",
+        type=int,
+        default=5,
+        help="Run batch every Nth run if strategy is 'adaptive' and evidence is stale (default: 5).",
     )
     parser.add_argument(
         "--batch-sample-every",
@@ -143,6 +154,11 @@ def main() -> None:
             logger.error("--promote-streaming is incompatible with --streaming-confidence-threshold")
             sys.exit(1)
 
+    if args.allow_inferred_promotion:
+        if args.disable_streaming:
+            logger.error("--allow-inferred-promotion is incompatible with --disable-streaming")
+            sys.exit(1)
+
     # --- Phase 20A: Determine Default Shadow Mode ---
     default_streaming_active = not args.disable_streaming
     experimental_streaming = args.experimental_streaming or default_streaming_active
@@ -157,7 +173,18 @@ def main() -> None:
     batch_skip_reason = None
     stable_streaming = False
     total_runs_history = 0
+    accuracy_metrics = {
+        "strict_match_success_rate": 0.0,
+        "fallback_rate": 1.0,
+        "avg_confidence_score": 0.0,
+    }
     summary_valid = False
+    inferred_promotion_allowed = False
+    runs_since_last_full_batch = 0
+    rolling_fallback_rate = 1.0
+    batch_validation_fresh = True
+    batch_required_by_rule = False
+    adaptive_batch_reason = None
 
     # Output variables initialization (Safety/Observability)
     selected_source = None
@@ -170,6 +197,7 @@ def main() -> None:
     row_level_parity = "SKIPPED"
     docs_compared = 0
     mismatched_docs: List[Dict[str, Any]] = []
+    promotion_basis = "none"
     confidence_metrics = {
         "global_match_ratio": 0.0,
         "document_match_ratio": 0.0,
@@ -179,7 +207,9 @@ def main() -> None:
     }
     selection_policy = "none"
     skip_reason = None
+    skip_reason = None
     promotion_attempted = False
+    validation_mode = "skipped_batch"
     execution_mode = "default_shadow" if default_streaming_active else "batch_only"
     if args.disable_streaming:
         execution_mode = "batch_only"
@@ -197,9 +227,19 @@ def main() -> None:
                     if "stability_metrics" in summary_data and "overall_counts" in summary_data:
                         stable_streaming = summary_data["stability_metrics"].get("stable_streaming")
                         total_runs_history = summary_data["overall_counts"].get("total_runs")
+                        if "accuracy_metrics" in summary_data:
+                            accuracy_metrics.update(summary_data["accuracy_metrics"])
 
                         if stable_streaming is not None and total_runs_history is not None:
                             summary_valid = True
+                            runs_since_last_full_batch = summary_data["stability_metrics"].get(
+                                "runs_since_last_full_batch", 0
+                            )
+                            rolling_fallback_rate = (
+                                summary_data["stability_metrics"]
+                                .get("rolling_metrics_last_10", {})
+                                .get("fallback_rate", 1.0)
+                            )
         except Exception as e:
             logger.warning(f"Malformed or invalid stability summary: {e}")
 
@@ -225,11 +265,67 @@ def main() -> None:
         else:
             run_batch = False
             batch_skip_reason = "sample_not_selected"
+    elif batch_strategy == "adaptive":
+        # Rule C: Freshness check
+        batch_validation_fresh = runs_since_last_full_batch < args.batch_freshness_window
 
-    logger.info(
-        f"Batch decision | strategy={batch_strategy} | executed={str(run_batch).lower()} | "
-        f"reason={batch_skip_reason or 'always_run'}"
-    )
+        if not summary_valid:
+            run_batch = True
+            batch_required_by_rule = True
+            adaptive_batch_reason = "missing_or_invalid_monitoring_context"
+        elif not stable_streaming:
+            # Rule A: Stability
+            run_batch = True
+            batch_required_by_rule = True
+            adaptive_batch_reason = "unstable_streaming"
+        elif rolling_fallback_rate > 0:
+            # Rule B: Recent fallback
+            run_batch = True
+            batch_required_by_rule = True
+            adaptive_batch_reason = f"recent_fallback_detected (rate={rolling_fallback_rate})"
+        elif not batch_validation_fresh:
+            # Rule C: Freshness
+            run_batch = True
+            batch_required_by_rule = True
+            adaptive_batch_reason = f"stale_evidence (runs_since_last_batch={runs_since_last_full_batch})"
+        else:
+            # Rule D: Ready
+            run_batch = False
+            batch_required_by_rule = False
+            adaptive_batch_reason = "safe_adaptive_skip"
+
+        batch_skip_reason = adaptive_batch_reason
+
+    def is_streaming_validation_eligible(stable: bool, metrics: Dict[str, Any], streaming_success: bool) -> bool:
+        """Determines if a run can be classified as streaming_only_validation."""
+        return (
+            stable is True
+            and metrics.get("strict_match_success_rate", 0.0) >= 1.0
+            and metrics.get("fallback_rate", 1.0) == 0.0
+            and metrics.get("avg_confidence_score", 0.0) >= 0.95
+            and streaming_success is True
+        )
+
+    if run_batch:
+        validation_mode = "full_batch_validation"
+    else:
+        # Initial classification based on historical performance
+        # Will be refined after streaming execution in Phase 7
+        validation_mode = "skipped_batch"
+
+    if batch_strategy == "adaptive":
+        logger.info(
+            f"Batch adaptive decision | executed={str(run_batch).lower()} | "
+            f"stable={str(stable_streaming).lower()} | fresh={str(batch_validation_fresh).lower()} | "
+            f"reason={adaptive_batch_reason}"
+        )
+    else:
+        logger.info(
+            f"Batch decision | strategy={batch_strategy} | executed={str(run_batch).lower()} | "
+            f"reason={batch_skip_reason or 'always_run'}"
+        )
+
+    logger.info(f"Validation mode | mode={validation_mode} | evaluable={str(run_batch).lower()}")
 
     # --- PHASE 0: Pre-execution Backup ---
     logger.info(">>> phase 0: pre-execution backup")
@@ -438,14 +534,38 @@ def main() -> None:
         val_dir = pathlib.Path(f"data/validation/legislature={args.term}")
         val_dir.mkdir(parents=True, exist_ok=True)
         streaming_candidate_path = val_dir / "interventions_streaming_candidate.parquet"
-
         if not run_batch:
-            parity_status = "SKIPPED"
+            # Classification Logic (Phase 23A)
+            eligible = is_streaming_validation_eligible(stable_streaming, accuracy_metrics, bool(streaming_records))
+            if eligible:
+                validation_mode = "streaming_only_validation"
+                parity_status = "INFERRED_VALID"
+
+                # Check for inferred promotion (Phase 23B)
+                if args.allow_inferred_promotion:
+                    if summary_valid:
+                        # Re-verify eligibility using strict criteria
+                        if is_streaming_validation_eligible(stable_streaming, accuracy_metrics, True):
+                            inferred_promotion_allowed = True
+                            logger.info("Inferred promotion | status=ALLOWED | stable=true | source=streaming")
+                        else:
+                            fallback_reason = "inferred_promotion_conditions_unmet"
+                    else:
+                        fallback_reason = "missing_or_invalid_stability_context"
+                else:
+                    fallback_reason = "inferred_promotion_disabled"
+
+            else:
+                validation_mode = "skipped_batch"
+                parity_status = "SKIPPED"
+                fallback_reason = "batch_skipped_no_inferred_eligibility"
+
             doc_level_parity = "SKIPPED"
             row_level_parity = "SKIPPED"
             confidence_level = "SKIPPED"
             skip_reason = "batch_skipped"
-            logger.info("Skipping parity validation because batch execution was skipped by strategy.")
+            if not eligible:
+                logger.info("Skipping parity validation because batch execution was skipped by strategy.")
         elif not new_files:
             parity_status = "SKIPPED"
             doc_level_parity = "SKIPPED"
@@ -538,18 +658,33 @@ def main() -> None:
                 if confidence_level == "FULL_MATCH" and streaming_candidate_path.exists():
                     selected_source = str(streaming_candidate_path)
                     promotion_result = "PROMOTED"
+                    promotion_basis = "batch_validated"
                     logger.info("Streaming guarded mode | strict_match=PASS → streaming selected")
+                elif validation_mode == "streaming_only_validation" and inferred_promotion_allowed:
+                    selected_source = str(streaming_candidate_path)
+                    promotion_result = "PROMOTED_INFERRED"
+                    promotion_basis = "inferred_validation"
+                    logger.info("Inferred promotion | status=ALLOWED | source=streaming")
                 else:
                     promotion_result = "FALLBACK"
+                    promotion_basis = "none"
                     if parity_status == "SKIPPED":
-                        fallback_reason = "validation_skipped"
+                        if fallback_reason is None:
+                            fallback_reason = "validation_skipped"
+                    elif validation_mode == "streaming_only_validation" and not inferred_promotion_allowed:
+                        # reason already set in Phase 7 logic
+                        pass
                     elif not streaming_candidate_path.exists():
                         fallback_reason = "candidate_missing"
                     else:
                         fallback_reason = "strict_match_failed"
-                    logger.info(
-                        f"Streaming guarded mode | strict_match=FAIL → fallback to batch | reason={fallback_reason}"
-                    )
+
+                    if validation_mode == "streaming_only_validation":
+                        logger.info(f"Inferred promotion | status=DENIED | reason={fallback_reason}")
+                    else:
+                        logger.info(
+                            f"Streaming guarded mode | strict_match=FAIL → fallback to batch | reason={fallback_reason}"
+                        )
             else:
                 selection_policy = "confidence_threshold"
                 threshold = args.streaming_confidence_threshold
@@ -625,6 +760,13 @@ def main() -> None:
             "batch_strategy": batch_strategy,
             "batch_executed": run_batch,
             "batch_skip_reason": batch_skip_reason,
+            "batch_validation_fresh": batch_validation_fresh if batch_strategy == "adaptive" else None,
+            "batch_required_by_rule": batch_required_by_rule if batch_strategy == "adaptive" else None,
+            "adaptive_batch_reason": adaptive_batch_reason,
+            "validation_mode": validation_mode,
+            "promotion_basis": promotion_basis,
+            "inferred_promotion_allowed": inferred_promotion_allowed,
+            "streaming_validation_basis": accuracy_metrics if not run_batch else None,
             "timestamp": datetime.now().isoformat(),
         }
 

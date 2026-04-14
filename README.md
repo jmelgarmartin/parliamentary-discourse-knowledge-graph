@@ -255,6 +255,62 @@ To optimize execution while maintaining safety, the pipeline supports conditiona
 - **System of Record**: The official batch outputs (`interventions_raw.parquet`) are always written and preserved, regardless of whether the candidate was promoted.
 - **Kill Switch**: The `--disable-streaming` flag remains authoritative and bypasses all streaming logic.
 
+### Validation Modes (Phase 22B)
+
+To ensure metric integrity and observability correctness, the system explicitly distinguishes between validation outcomes:
+
+- **full_batch_validation**: The run was fully validated against the authoritative batch source. These runs are **evaluable** and count towards accuracy metrics (success rate, fallback rate, confidence).
+- **skipped_batch**: Batch execution was intentionally skipped (e.g., via sampling), and the run does not meet stability criteria for inferred validation. Metrics are not evaluable.
+
+## Streaming-Only Validation Classification (Phase 23A)
+
+Introduced in Phase 23A, `streaming_only_validation` is an inferred validation category used when batch execution is skipped but the pipeline has demonstrated high historical stability.
+
+- **Usage**: Automatically triggered when `batch_strategy` skips execution but `stable_streaming` is true and historical accuracy metrics (`strict_match`, `confidence`) are high.
+- **Safety**: This mode is strictly classificatory. It **does not** trigger automatic promotion or alter source selection. It serves to track "likely valid" runs without requiring full batch backing.
+- **Parity Status**: Such runs are marked as `INFERRED_VALID` instead of `MATCH` or `SKIPPED`.
+- **Reporting**: These runs are reported separately from `full_batch_validation` and are not included in the core stability metrics used for promotion decisions.
+
+This decoupling ensures that "skipped" runs do not artificially inflate or deflate the observed stability of the streaming pipeline.
+
+## Inferred Promotion Policy (Phase 23B)
+
+Introduced in Phase 23B, Inferred Promotion allows strictly controlled, opt-in promotion for runs classified as `streaming_only_validation`.
+
+- **Opt-in Only**: Requires the `--allow-inferred-promotion` flag.
+- **Authoritative Kill Switch**: If `--disable-streaming` is used, it overrides and disables inferred promotion.
+- **Rigorous Eligibility**: Promotion only occurs if `stable_streaming` is true AND historical metrics meet strict thresholds:
+  - `strict_match_success_rate` == 100%
+  - `fallback_rate` == 0%
+  - `avg_confidence_score` >= 0.95
+- **Promotion Result**: If successful, the run is marked as `PROMOTED_INFERRED`.
+- **Defensive Safety**: If the monitoring summary is missing, malformed, or inconsistent, the system forces a `FALLBACK` with reason `missing_or_invalid_stability_context`.
+- **System of Record**: Full batch-backed validation remains the strongest evidence path. Inferred promotion is an operational optimization for stable streams.
+- **Rules Integrated with Adaptive Batch**: These eligibility metrics also drive Rule B and Rule D of the Adaptive Batch Strategy.
+
+## Adaptive Batch Degradation (Phase 24)
+
+Introduced in Phase 24, Adaptive Batch transforms batch execution from a structural dependency into an adaptive safety mechanism. Instead of running on every execution, batch is triggered dynamically based on the observed stability and freshness of the streaming pipeline.
+
+### Adaptive Decision Rules
+The system uses the following deterministic rules to decide if `run_batch` is required:
+
+- **Rule A (Stability)**: Batch **must run** if `stable_streaming` is `false`.
+- **Rule B (Recent Fallback)**: Batch **must run** if there has been any recent `FALLBACK` in the stability window (specifically if `rolling_metrics_last_10.fallback_rate > 0`).
+- **Rule C (Freshness)**: Batch **must run periodically** to refresh the baseline evidence. If the number of runs since the last `full_batch_validation` exceeds the `--batch-freshness-window` (default: 5), batch is triggered.
+- **Rule D (Ready)**: Batch is **safely skipped** only if streaming is stable, no recent fallbacks are detected, and the baseline evidence is fresh.
+
+### Safety & Observability
+- **Deterministic**: Decisions are based strictly on historical logs and CLI parameters; no randomness is involved.
+- **Transparent**: Every decision is logged and recorded in `validation_run_summary.json` via fields like `batch_required_by_rule` and `adaptive_batch_reason`.
+- **Safe Fallback**: If the monitoring context (`promotion_monitoring_summary.json`) is missing or invalid, the system defaults to `run_batch=True`.
+- **Reversible**: Operators can force full validation at any time using `--batch-strategy always`.
+
+### Command Example
+```bash
+python src/main.py --batch-strategy adaptive --batch-freshness-window 10
+```
+
 ### Backward Compatibility
 Explicit flags (`--use-streaming-candidate`, `--promote-streaming`) are retained to support legacy workflows and allow operators to explicitly state their intent, even though candidate evaluation is now the guarded default.
 

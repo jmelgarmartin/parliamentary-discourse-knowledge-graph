@@ -52,8 +52,29 @@ def run_report() -> None:
 
     # 1. Distinguish runs
     total_runs = len(entries)
-    evaluable_entries = [e for e in entries if e.get("parity_status") != "SKIPPED"]
-    skipped_entries = [e for e in entries if e.get("parity_status") == "SKIPPED"]
+    full_batch_evaluable_runs = [e for e in entries if e.get("validation_mode") == "full_batch_validation"]
+    streaming_only_evaluable_runs = [e for e in entries if e.get("validation_mode") == "streaming_only_validation"]
+
+    # evaluable_entries (Legacy/Decision metrics) must remain strictly full_batch_validation
+    evaluable_entries = full_batch_evaluable_runs
+    skipped_entries = [
+        e for e in entries if e.get("validation_mode") not in ["full_batch_validation", "streaming_only_validation"]
+    ]
+
+    # Freshness metric (Phase 24)
+    # distance from current end to the last "full_batch_validation"
+    runs_since_last_full_batch = 0
+    if total_runs > 0:
+        last_full_batch_idx = -1
+        for i in range(total_runs - 1, -1, -1):
+            if entries[i].get("validation_mode") == "full_batch_validation":
+                last_full_batch_idx = i
+                break
+
+        if last_full_batch_idx == -1:
+            runs_since_last_full_batch = total_runs
+        else:
+            runs_since_last_full_batch = (total_runs - 1) - last_full_batch_idx
 
     # 2. run_mode distribution (Global)
     run_modes = [e.get("run_mode", "unknown") for e in entries]
@@ -105,8 +126,10 @@ def run_report() -> None:
     report = {
         "overall_counts": {
             "total_runs": total_runs,
-            "evaluable_runs": len(evaluable_entries),
+            "full_batch_evaluable_runs": len(full_batch_evaluable_runs),
+            "streaming_only_evaluable_runs": len(streaming_only_evaluable_runs),
             "skipped_runs": len(skipped_entries),
+            "runs_since_last_full_batch": runs_since_last_full_batch,
         },
         "run_mode_distribution": run_mode_dist,
         "promotion_metrics": {"attempted": promotion_attempted_count, "result_distribution": promotion_dist},
@@ -117,6 +140,7 @@ def run_report() -> None:
             "stable_streaming": stable,
             "stability_rule_applied": rule,
             "stability_reason": reason,
+            "runs_since_last_full_batch": runs_since_last_full_batch,
         },
         "recommendation": {
             "ready_for_default_promotion": stable,  # Synced with stability for now
@@ -132,9 +156,15 @@ def run_report() -> None:
 
     print(f"Report generated successfully: {output_path}")
     print(
-        f">>> Streaming stability window | evaluable_runs={len(rolling_10_subset)} | "
+        f">>> Streaming stability window | evaluable_runs(batch)={len(rolling_10_subset)} | "
         f"success={rolling_10['strict_match_success_rate']:.2%} | stable={str(stable).lower()}"
     )
+    inferred_promotions = promotion_dist.get("PROMOTED_INFERRED", 0)
+    print(
+        f">>> Inferred coverage | streaming_only_evaluable_runs={len(streaming_only_evaluable_runs)} | "
+        f"inferred_promotions={inferred_promotions}"
+    )
+    print(f">>> Adaptive batch | runs_since_last_full_batch={runs_since_last_full_batch}")
 
     if stable:
         print(">>> STATUS: STABLE streaming pipeline.")
