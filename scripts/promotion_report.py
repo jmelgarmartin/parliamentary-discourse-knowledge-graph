@@ -123,9 +123,114 @@ def run_report() -> None:
             f"avg_conf={rolling_10['avg_confidence_score']:.2f}"
         )
 
-    # 6. Batch Retirement Readiness (Phase 25)
+    # 6. Recovery-Only Readiness Assessment (Phase 27)
     recent_entry_window = 20
     recent_entries = entries[-recent_entry_window:]
+
+    # Audit Classifications (only for batch runs)
+    audit_entries = [entry for entry in recent_entries if entry.get("batch_executed") is True]
+
+    corrective_audits = []
+    confirmatory_audits = []
+    redundant_audits = []
+
+    for entry in audit_entries:
+        # Corrective if it detected a mismatch or triggered a fallback
+        if entry.get("parity_status") == "MISMATCH" or entry.get("promotion_result") == "FALLBACK":
+            corrective_audits.append(entry)
+            audit_type = "corrective"
+        # Confirmatory if it matched and allowed promotion
+        elif entry.get("parity_status") == "MATCH" and entry.get("promotion_result") == "PROMOTED":
+            confirmatory_audits.append(entry)
+            audit_type = "confirmatory"
+        else:
+            redundant_audits.append(entry)
+            audit_type = "redundant"
+
+        # Logging classification as requested in Phase 27
+        if "timestamp" in entry:
+            print(f"Audit classification | timestamp={entry['timestamp']} | type={audit_type}")
+
+    recent_audit_count = len(audit_entries)
+    corrective_count = len(corrective_audits)
+    confirmatory_count = len(confirmatory_audits)
+    redundant_count = len(redundant_audits)
+
+    corrective_rate = round(corrective_count / recent_audit_count, 4) if recent_audit_count > 0 else 0.0
+    confirmatory_rate = round(confirmatory_count / recent_audit_count, 4) if recent_audit_count > 0 else 0.0
+    redundant_rate = round(redundant_count / recent_audit_count, 4) if recent_audit_count > 0 else 0.0
+
+    full_match_audits = sum(1 for entry in audit_entries if entry.get("confidence_level") == "FULL_MATCH")
+    recent_audit_full_match_rate = round(full_match_audits / recent_audit_count, 4) if recent_audit_count > 0 else 0.0
+
+    # runs_since_last_mismatch
+    # Mismatch is parity_status == "MISMATCH"
+    runs_since_last_mismatch = 0
+    mismatch_found = False
+    if total_runs > 0:
+        for i in range(total_runs - 1, -1, -1):
+            if entries[i].get("parity_status") == "MISMATCH":
+                runs_since_last_mismatch = (total_runs - 1) - i
+                mismatch_found = True
+                break
+        if not mismatch_found:
+            # Documented convention: if never matched, use total historical runs
+            runs_since_last_mismatch = total_runs
+
+    recovery_rule = (
+        "stable_streaming == True AND recent_mismatch_count == 0 AND "
+        "recent_audit_full_match_rate == 1.0 AND runs_since_last_mismatch >= 50"
+    )
+
+    recovery_reasons = []
+    if not stable:
+        recovery_reasons.append("Streaming pipeline is not yet stable")
+
+    # recent_audit_mismatch_count
+    recent_audit_mismatch_count = sum(1 for entry in audit_entries if entry.get("parity_status") == "MISMATCH")
+    if recent_audit_mismatch_count > 0:
+        recovery_reasons.append(f"Detected {recent_audit_mismatch_count} mismatches in the audit window")
+
+    if recent_audit_full_match_rate < 1.0:
+        recovery_reasons.append(f"Audit full match rate ({recent_audit_full_match_rate:.2%}) is below 100%")
+
+    if runs_since_last_mismatch < 50:
+        mismatch_context = (
+            f"(last mismatch {runs_since_last_mismatch} runs ago)" if mismatch_found else "(never matched)"
+        )
+        recovery_reasons.append(f"Insufficient history since last mismatch {mismatch_context}, need 50 runs")
+
+    ready_for_recovery_only = len(recovery_reasons) == 0
+    recommended_recovery_mode = "move_to_recovery_only" if ready_for_recovery_only else "keep_periodic_audit"
+
+    recovery_readiness = {
+        "ready": ready_for_recovery_only,
+        "recommended_next_mode": recommended_recovery_mode,
+        "rule_applied": recovery_rule,
+        "reason": "Criteria met" if ready_for_recovery_only else "; ".join(recovery_reasons),
+        "metrics": {
+            "recent_periodic_audit_count": recent_audit_count,
+            "recent_periodic_audit_match_rate": round(
+                (recent_audit_count - recent_audit_mismatch_count) / recent_audit_count, 4
+            )
+            if recent_audit_count > 0
+            else 1.0,
+            "recent_periodic_audit_mismatch_count": recent_audit_mismatch_count,
+            "recent_periodic_audit_full_match_rate": recent_audit_full_match_rate,
+            "runs_since_last_mismatch": runs_since_last_mismatch,
+            "mismatch_history_context": "last_mismatch_found" if mismatch_found else "no_mismatch_in_history",
+            "audit_effectiveness": {
+                "corrective_audit_count": corrective_count,
+                "corrective_audit_rate": corrective_rate,
+                "confirmatory_audit_count": confirmatory_count,
+                "confirmatory_audit_rate": confirmatory_rate,
+                "redundant_audit_count": redundant_count,
+                "redundant_audit_rate": redundant_rate,
+            },
+        },
+    }
+
+    # 7. Batch Retirement Readiness (Phase 25 - kept for compatibility)
     recent_fallbacks = sum(1 for e in recent_entries if e.get("promotion_result") == "FALLBACK")
     recent_full_batch_count = sum(1 for e in recent_entries if e.get("validation_mode") == "full_batch_validation")
     recent_streaming_only_count = sum(
@@ -136,7 +241,7 @@ def run_report() -> None:
         1 for e in recent_entries if e.get("adaptive_batch_reason") == "safe_adaptive_skip"
     )
     # Phase 26 metrics
-    recent_periodic_audit_count = sum(
+    recent_periodic_audit_count_v26 = sum(
         1 for e in recent_entries if e.get("batch_strategy") == "periodic_audit" and e.get("batch_executed") is True
     )
     recent_periodic_audit_skip = sum(
@@ -178,7 +283,7 @@ def run_report() -> None:
             "recent_streaming_only_count": recent_streaming_only_count,
             "recent_inferred_promotion_count": recent_inferred_promotion_count,
             "recent_adaptive_skip_count": recent_adaptive_skip_count,
-            "recent_periodic_audit_count": recent_periodic_audit_count,
+            "recent_periodic_audit_count": recent_periodic_audit_count_v26,
             "recent_periodic_audit_skip": recent_periodic_audit_skip,
             "batch_reactivation_rate": batch_reactivation_rate,
             "runs_since_last_full_batch": runs_since_last_full_batch,
@@ -193,6 +298,7 @@ def run_report() -> None:
             "streaming_only_evaluable_runs": len(streaming_only_evaluable_runs),
             "skipped_runs": len(skipped_entries),
             "runs_since_last_full_batch": runs_since_last_full_batch,
+            "runs_since_last_mismatch": runs_since_last_mismatch,
         },
         "run_mode_distribution": run_mode_dist,
         "promotion_metrics": {"attempted": promotion_attempted_count, "result_distribution": promotion_dist},
@@ -206,6 +312,7 @@ def run_report() -> None:
             "runs_since_last_full_batch": runs_since_last_full_batch,
         },
         "batch_retirement_readiness": retirement_readiness,
+        "batch_recovery_only_readiness": recovery_readiness,
         "recommendation": {
             "ready_for_default_promotion": stable,  # Synced with stability for now
             "rule_applied": rule,

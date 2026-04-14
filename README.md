@@ -361,6 +361,33 @@ The system evaluates the following deterministic rules to decide if a batch audi
 python src/main.py --batch-strategy periodic_audit --batch-audit-every 20
 ```
 
+## Recovery-Only Batch Mode Assessment (Phase 27)
+
+Phase 27 introduces an observability layer to evaluate whether the system can safely transition from periodic audits to a **recovery-only** batch mode.
+
+### Difference from Periodic Audit
+- **Periodic Audit**: Batch runs proactively every N runs to maintain a validation baseline.
+- **Recovery-Only**: Batch runs ONLY when a failure is detected or explicit recovery is requested.
+
+### Audit Usefulness Classification
+Every batch audit run is classified into one of three categories:
+- **Corrective Audit**: The audit detected a `MISMATCH` or triggered a `FALLBACK`. This proves the audit was necessary for system correctness.
+- **Confirmatory Audit**: The audit confirmed a `MATCH` and allowed `PROMOTED` status. This proves the streaming pipeline was correct but the audit added confidence.
+- **Redundant Audit**: The audit ran but provided no impact on the outcome or confidence baseline.
+
+### Recovery-Only Readiness Criteria
+The system is considered ready for recovery-only mode if it meets these deterministic criteria:
+- **Streaming Stability**: `stable_streaming == True`.
+- **Zero Recent Mismatches**: No parity mismatches in the last 20-run audit window.
+- **Perfect Audit Track Record**: `recent_audit_full_match_rate == 100%`.
+- **Historical Depth**: At least **50 runs** since the last detected mismatch (or never matched in history).
+
+### Why Batch is Still Required
+Even in recovery-only mode, batch processing remains a fundamental dependency for:
+- **Baseline Generation**: Initial ground truth for new legislatures.
+- **Fail-Safe Recovery**: Rebuilding the silver layer after a catastrophic streaming failure.
+- **Manual Audits**: On-demand verification of suspect data.
+
 ### Command Examples
 
 **1. Standard Guarded Run (Default):**

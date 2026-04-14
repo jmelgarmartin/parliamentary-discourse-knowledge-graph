@@ -144,6 +144,98 @@ class TestPromotionReport(unittest.TestCase):
         self.assertFalse(readiness["ready_for_batch_retirement"])
         self.assertIn("Full batch evidence is too stale", readiness["retirement_reason"])
 
+    @patch("pathlib.Path.exists")
+    @patch("builtins.open")
+    @patch("os.makedirs")
+    @patch("json.dump")
+    def test_recovery_readiness_true_when_stable_no_mismatches(
+        self, mock_json_dump: MagicMock, mock_makedirs: MagicMock, mock_open_file: MagicMock, mock_exists: MagicMock
+    ) -> None:
+        """Verify ready=True for recovery-only mode when system is stable and clean."""
+        history_entries = []
+        # Add 60 clean batch audits (FULL_MATCH)
+        for i in range(60):
+            history_entries.append(
+                {
+                    "batch_strategy": "periodic_audit",
+                    "batch_executed": True,
+                    "validation_mode": "full_batch_validation",
+                    "confidence_level": "FULL_MATCH",
+                    "parity_status": "MATCH",
+                    "promotion_result": "PROMOTED",
+                    "confidence_score": 1.0,
+                }
+            )
+
+        mock_exists.return_value = True
+        mock_open_file.return_value.__enter__.return_value = [json.dumps(e) for e in history_entries]
+
+        run_report()
+
+        report = mock_json_dump.call_args[0][0]
+        recovery = report["batch_recovery_only_readiness"]
+
+        self.assertTrue(recovery["ready"])
+        self.assertEqual(recovery["recommended_next_mode"], "move_to_recovery_only")
+        self.assertEqual(recovery["metrics"]["recent_periodic_audit_mismatch_count"], 0)
+        self.assertEqual(recovery["metrics"]["runs_since_last_mismatch"], 60)  # total_runs because never matched
+
+    @patch("pathlib.Path.exists")
+    @patch("builtins.open")
+    @patch("os.makedirs")
+    @patch("json.dump")
+    def test_audit_usefulness_classification(
+        self, mock_json_dump: MagicMock, mock_makedirs: MagicMock, mock_open_file: MagicMock, mock_exists: MagicMock
+    ) -> None:
+        """Verify that audits are correctly classified as corrective, confirmatory, or redundant."""
+        history_entries = []
+
+        # 1. Corrective (Mismatch)
+        history_entries.append(
+            {
+                "batch_executed": True,
+                "parity_status": "MISMATCH",
+                "promotion_result": "FALLBACK",
+            }
+        )
+        # 2. Corrective (Fallback despite match - safety gate)
+        history_entries.append(
+            {
+                "batch_executed": True,
+                "parity_status": "MATCH",
+                "promotion_result": "FALLBACK",
+            }
+        )
+        # 3. Confirmatory (Match + Promotion)
+        history_entries.append(
+            {
+                "batch_executed": True,
+                "parity_status": "MATCH",
+                "promotion_result": "PROMOTED",
+            }
+        )
+        # 4. Redundant (Batch ran but no effect)
+        history_entries.append(
+            {
+                "batch_executed": True,
+                "parity_status": "MATCH",
+                "promotion_result": "PROMOTED_INFERRED",  # Ran but not strictly confirmatory of a promotion choice
+            }
+        )
+
+        mock_exists.return_value = True
+        mock_open_file.return_value.__enter__.return_value = [json.dumps(e) for e in history_entries]
+
+        run_report()
+
+        report = mock_json_dump.call_args[0][0]
+        effectiveness = report["batch_recovery_only_readiness"]["metrics"]["audit_effectiveness"]
+
+        self.assertEqual(effectiveness["corrective_audit_count"], 2)
+        self.assertEqual(effectiveness["confirmatory_audit_count"], 1)
+        self.assertEqual(effectiveness["redundant_audit_count"], 1)
+        self.assertEqual(effectiveness["corrective_audit_rate"], 0.5)
+
 
 if __name__ == "__main__":
     unittest.main()
