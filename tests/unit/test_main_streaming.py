@@ -775,6 +775,214 @@ class TestMainStreaming(unittest.TestCase):
             self.assertTrue("recent_fallback_detected" in summary["adaptive_batch_reason"])
             self.assertTrue(summary["batch_required_by_rule"])
 
+    # --- Phase 26 Periodic Audit Tests ---
+
+    @patch("main.InterventionsExtractor")
+    @patch("main.argparse.ArgumentParser.parse_args")
+    @patch("json.dump")
+    def test_periodic_audit_runs_batch_when_due(
+        self,
+        mock_json_dump: MagicMock,
+        mock_args: MagicMock,
+        mock_extractor: MagicMock,
+    ) -> None:
+        """Periodic audit runs batch when audit window is reached."""
+        mock_args.return_value = argparse.Namespace(
+            term="15",
+            driver_path=None,
+            state_path="s",
+            log_level="INFO",
+            headless=True,
+            disable_streaming=False,
+            experimental_streaming=True,
+            use_streaming_candidate=False,
+            promote_streaming=False,
+            streaming_confidence_threshold=None,
+            batch_strategy="periodic_audit",
+            batch_audit_every=10,
+            batch_freshness_window=5,
+            batch_sample_every=5,
+            allow_inferred_promotion=False,
+        )
+        # Summary says STABLE but AUDIT DUE (runs_since = 10, window = 10)
+        mock_summary = json.dumps(
+            {
+                "overall_counts": {"total_runs": 10},
+                "stability_metrics": {
+                    "stable_streaming": True,
+                    "runs_since_last_full_batch": 10,
+                    "rolling_metrics_last_10": {"fallback_rate": 0.0},
+                },
+            }
+        )
+        with patch("main.setup_logging"), patch("main.BackupManager"), patch("main.GroupsScraper"), patch(
+            "main.DeputiesScraper"
+        ), patch("main.SubstitutionsEnricher", return_value=self._get_enricher_mock()), patch(
+            "pathlib.Path.exists", return_value=True
+        ), patch("builtins.open", mock_open(read_data=mock_summary)), patch("main.run_interventions_enrichment"), patch(
+            "pathlib.Path.mkdir"
+        ), patch("main.SessionsScraper") as mock_s_scraper_class, patch("main.pd.read_parquet") as mock_rp:
+            self._setup_common_mocks(mock_rp, mock_s_scraper_class)
+            main.main()
+            mock_extractor.return_value.run.assert_called()
+            summary = mock_json_dump.call_args_list[1][0][0]
+            self.assertEqual(summary["batch_executed"], True)
+            self.assertTrue(summary["batch_audit_due"])
+            self.assertEqual(summary["batch_strategy"], "periodic_audit")
+            self.assertTrue("audit_due" in summary["batch_audit_reason"])
+
+    @patch("main.InterventionsExtractor")
+    @patch("main.argparse.ArgumentParser.parse_args")
+    @patch("json.dump")
+    def test_periodic_audit_skips_batch_when_not_due(
+        self,
+        mock_json_dump: MagicMock,
+        mock_args: MagicMock,
+        mock_extractor: MagicMock,
+    ) -> None:
+        """Periodic audit skips batch when audit window is not yet reached and system is stable."""
+        mock_args.return_value = argparse.Namespace(
+            term="15",
+            driver_path=None,
+            state_path="s",
+            log_level="INFO",
+            headless=True,
+            disable_streaming=False,
+            experimental_streaming=True,
+            use_streaming_candidate=False,
+            promote_streaming=False,
+            streaming_confidence_threshold=None,
+            batch_strategy="periodic_audit",
+            batch_audit_every=10,
+            batch_freshness_window=5,
+            batch_sample_every=5,
+            allow_inferred_promotion=False,
+        )
+        # Summary says STABLE and NOT DUE (runs_since = 5, window = 10)
+        mock_summary = json.dumps(
+            {
+                "overall_counts": {"total_runs": 10},
+                "stability_metrics": {
+                    "stable_streaming": True,
+                    "runs_since_last_full_batch": 5,
+                    "rolling_metrics_last_10": {"fallback_rate": 0.0},
+                },
+            }
+        )
+        with patch("main.setup_logging"), patch("main.BackupManager"), patch("main.GroupsScraper"), patch(
+            "main.DeputiesScraper"
+        ), patch("main.SubstitutionsEnricher", return_value=self._get_enricher_mock()), patch(
+            "pathlib.Path.exists", return_value=True
+        ), patch("builtins.open", mock_open(read_data=mock_summary)), patch("main.run_interventions_enrichment"), patch(
+            "pathlib.Path.mkdir"
+        ), patch("main.SessionsScraper") as mock_s_scraper_class, patch("main.pd.read_parquet") as mock_rp:
+            self._setup_common_mocks(mock_rp, mock_s_scraper_class)
+            main.main()
+            mock_extractor.return_value.run.assert_not_called()
+            summary = mock_json_dump.call_args_list[1][0][0]
+            self.assertEqual(summary["batch_executed"], False)
+            self.assertFalse(summary["batch_audit_due"])
+            self.assertEqual(summary["batch_skip_reason"], "periodic_audit_skip")
+
+    @patch("main.InterventionsExtractor")
+    @patch("main.argparse.ArgumentParser.parse_args")
+    @patch("json.dump")
+    def test_periodic_audit_runs_batch_on_instability(
+        self,
+        mock_json_dump: MagicMock,
+        mock_args: MagicMock,
+        mock_extractor: MagicMock,
+    ) -> None:
+        """Periodic audit triggers batch if stable_streaming is False, regardless of freshness."""
+        mock_args.return_value = argparse.Namespace(
+            term="15",
+            driver_path=None,
+            state_path="s",
+            log_level="INFO",
+            headless=True,
+            disable_streaming=False,
+            experimental_streaming=True,
+            use_streaming_candidate=False,
+            promote_streaming=False,
+            streaming_confidence_threshold=None,
+            batch_strategy="periodic_audit",
+            batch_audit_every=10,
+            allow_inferred_promotion=False,
+        )
+        # Summary says UNSTABLE but FRESH (runs_since = 1)
+        mock_summary = json.dumps(
+            {
+                "overall_counts": {"total_runs": 10},
+                "stability_metrics": {
+                    "stable_streaming": False,
+                    "runs_since_last_full_batch": 1,
+                    "rolling_metrics_last_10": {"fallback_rate": 0.0},
+                },
+            }
+        )
+        with patch("main.setup_logging"), patch("main.BackupManager"), patch("main.GroupsScraper"), patch(
+            "main.DeputiesScraper"
+        ), patch("main.SubstitutionsEnricher", return_value=self._get_enricher_mock()), patch(
+            "pathlib.Path.exists", return_value=True
+        ), patch("builtins.open", mock_open(read_data=mock_summary)), patch("main.run_interventions_enrichment"), patch(
+            "pathlib.Path.mkdir"
+        ), patch("main.SessionsScraper") as mock_s_scraper_class, patch("main.pd.read_parquet") as mock_rp:
+            self._setup_common_mocks(mock_rp, mock_s_scraper_class)
+            main.main()
+            mock_extractor.return_value.run.assert_called()
+            summary = mock_json_dump.call_args_list[1][0][0]
+            self.assertEqual(summary["batch_executed"], True)
+            self.assertEqual(summary["batch_audit_reason"], "unstable_streaming")
+            self.assertTrue(summary["batch_audit_due"])
+
+    @patch("main.InterventionsExtractor")
+    @patch("main.argparse.ArgumentParser.parse_args")
+    @patch("json.dump")
+    def test_periodic_audit_fallback_on_invalid_context(
+        self,
+        mock_json_dump: MagicMock,
+        mock_args: MagicMock,
+        mock_extractor: MagicMock,
+    ) -> None:
+        """Periodic audit triggers batch if monitoring context is missing or invalid."""
+        mock_args.return_value = argparse.Namespace(
+            term="15",
+            driver_path=None,
+            state_path="s",
+            log_level="INFO",
+            headless=True,
+            disable_streaming=False,
+            experimental_streaming=True,
+            use_streaming_candidate=False,
+            promote_streaming=False,
+            streaming_confidence_threshold=None,
+            batch_strategy="periodic_audit",
+            batch_audit_every=10,
+            allow_inferred_promotion=False,
+        )
+
+        # Summary is MISSING
+        def exists_side_effect(self_obj: Any) -> bool:
+            if "promotion_monitoring_summary.json" in str(self_obj):
+                return False
+            return True
+
+        with patch("main.setup_logging"), patch("main.BackupManager"), patch("main.GroupsScraper"), patch(
+            "main.DeputiesScraper"
+        ), patch("main.SubstitutionsEnricher", return_value=self._get_enricher_mock()), patch(
+            "pathlib.Path.exists", side_effect=exists_side_effect, autospec=True
+        ), patch("main.run_interventions_enrichment"), patch("pathlib.Path.mkdir"), patch(
+            "main.SessionsScraper"
+        ) as mock_s_scraper_class, patch("main.pd.read_parquet") as mock_rp:
+            self._setup_common_mocks(mock_rp, mock_s_scraper_class)
+            main.main()
+            mock_extractor.return_value.run.assert_called()
+            summary = mock_json_dump.call_args_list[1][0][0]
+            self.assertEqual(summary["batch_executed"], True)
+            self.assertTrue(summary["batch_audit_due"])
+            self.assertEqual(summary["batch_audit_reason"], "missing_or_invalid_monitoring_context")
+            self.assertTrue(summary["periodic_audit_mode_active"])
+
 
 if __name__ == "__main__":
     unittest.main()

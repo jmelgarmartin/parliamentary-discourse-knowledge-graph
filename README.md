@@ -337,6 +337,30 @@ The `promotion_monitoring_summary.json` includes a `batch_retirement_readiness` 
 - **Assessment-Only**: This phase does **not** modify the runtime behavior of `src/main.py`. It provides decision-support metrics for future phases.
 - **Periodic Evidence**: The freshness threshold ensures that ground-truth validation is never abandoned completely, even in highly stable environments.
 
+## Periodic Audit Batch Mode (Phase 26)
+
+Introduced in Phase 26, the Periodic Audit strategy officially transitions batch execution from a synchronous safety mechanism into a background audit role. This mode prioritizes the streaming pipeline for production while ensuring that ground-truth validation is performed periodically or immediately upon detection of issues.
+
+### Audit Trigger Rules
+The system evaluates the following deterministic rules to decide if a batch audit is required:
+
+- **Rule A (Stability Check)**: Batch **must run** if `stable_streaming` is `false`.
+- **Rule B (Degradation Check)**: Batch **must run** if any recent fallback has been detected in the stability window (`rolling_metrics_last_10.fallback_rate > 0`).
+- **Rule C (Freshness Check)**: Batch **must run periodically** to refresh validation evidence. If the number of runs since the last `full_batch_validation` meets or exceeds `--batch-audit-every` (default: 10), an audit is triggered.
+- **Rule D (Ready)**: Batch is **safely skipped** only if streaming is stable, no recent fallbacks are detected, and the audit window has not been reached.
+
+### Safety & Recovery
+- **Safe Fallback**: If the monitoring summary (`promotion_monitoring_summary.json`) is missing, malformed, or incomplete, the system forces a batch audit for safety.
+- **Audit Decision Metadata**: Every decision is recorded in `validation_run_summary.json` via fields:
+  - `batch_audit_due`: Boolean indicating if an audit was required.
+  - `batch_audit_reason`: Specific rule that triggered the audit.
+  - `periodic_audit_mode_active`: Boolean flag confirming the strategy was in use.
+
+### Command Example
+```bash
+python src/main.py --batch-strategy periodic_audit --batch-audit-every 20
+```
+
 ### Command Examples
 
 **1. Standard Guarded Run (Default):**

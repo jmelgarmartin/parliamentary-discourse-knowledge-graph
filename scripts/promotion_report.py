@@ -135,6 +135,14 @@ def run_report() -> None:
     recent_adaptive_skip_count = sum(
         1 for e in recent_entries if e.get("adaptive_batch_reason") == "safe_adaptive_skip"
     )
+    # Phase 26 metrics
+    recent_periodic_audit_count = sum(
+        1 for e in recent_entries if e.get("batch_strategy") == "periodic_audit" and e.get("batch_executed") is True
+    )
+    recent_periodic_audit_skip = sum(
+        1 for e in recent_entries if e.get("batch_strategy") == "periodic_audit" and e.get("batch_executed") is False
+    )
+
     reactivations = sum(1 for e in recent_entries if e.get("batch_required_by_rule") is True)
     batch_reactivation_rate = round(reactivations / len(recent_entries), 4) if recent_entries else 0.0
 
@@ -170,8 +178,11 @@ def run_report() -> None:
             "recent_streaming_only_count": recent_streaming_only_count,
             "recent_inferred_promotion_count": recent_inferred_promotion_count,
             "recent_adaptive_skip_count": recent_adaptive_skip_count,
+            "recent_periodic_audit_count": recent_periodic_audit_count,
+            "recent_periodic_audit_skip": recent_periodic_audit_skip,
             "batch_reactivation_rate": batch_reactivation_rate,
             "runs_since_last_full_batch": runs_since_last_full_batch,
+            "audit_freshness_status": runs_since_last_full_batch < 10,
         },
     }
 

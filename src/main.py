@@ -104,9 +104,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--batch-strategy",
-        choices=["always", "sampled", "disabled_only_if_stable", "adaptive"],
+        choices=["always", "sampled", "disabled_only_if_stable", "adaptive", "periodic_audit"],
         default="always",
-        help="Strategy for batch execution (always, sampled, disabled_only_if_stable, or adaptive).",
+        help="Strategy for batch execution (always, sampled, disabled_only_if_stable, adaptive, or periodic_audit).",
     )
     parser.add_argument(
         "--batch-freshness-window",
@@ -119,6 +119,12 @@ def main() -> None:
         type=int,
         default=5,
         help="Run batch every Nth execution when strategy is 'sampled' (default: 5).",
+    )
+    parser.add_argument(
+        "--batch-audit-every",
+        type=int,
+        default=10,
+        help="Run batch every Nth execution when strategy is 'periodic_audit' (default: 10).",
     )
 
     args = parser.parse_args()
@@ -168,7 +174,6 @@ def main() -> None:
 
     # --- Phase 22A: Batch Sampling Strategy (Hardened) ---
     batch_strategy = args.batch_strategy
-    batch_sample_every = args.batch_sample_every
     run_batch = True
     batch_skip_reason = None
     stable_streaming = False
@@ -185,6 +190,11 @@ def main() -> None:
     batch_validation_fresh = True
     batch_required_by_rule = False
     adaptive_batch_reason = None
+
+    # Phase 26: Periodic Audit Metadata
+    batch_audit_due = False
+    batch_audit_reason = ""
+    periodic_audit_mode_active = args.batch_strategy == "periodic_audit"
 
     # Output variables initialization (Safety/Observability)
     selected_source = None
@@ -206,7 +216,6 @@ def main() -> None:
         "confidence_level": "SKIPPED",
     }
     selection_policy = "none"
-    skip_reason = None
     skip_reason = None
     promotion_attempted = False
     validation_mode = "skipped_batch"
@@ -247,6 +256,8 @@ def main() -> None:
     if not summary_valid and batch_strategy != "always":
         run_batch = True
         batch_skip_reason = "missing_or_invalid_summary_fallback"
+        batch_audit_due = True
+        batch_audit_reason = "missing_or_invalid_monitoring_context"
     elif batch_strategy == "always":
         run_batch = True
         batch_skip_reason = "always_run"
@@ -259,7 +270,7 @@ def main() -> None:
             batch_skip_reason = "not_stable"
     elif batch_strategy == "sampled":
         # Deterministic sampling based on history count (Hardened)
-        if (total_runs_history + 1) % batch_sample_every == 0:
+        if (total_runs_history + 1) % args.batch_sample_every == 0:
             run_batch = True
             batch_skip_reason = "sample_selected"
         else:
@@ -279,7 +290,7 @@ def main() -> None:
             batch_required_by_rule = True
             adaptive_batch_reason = "unstable_streaming"
         elif rolling_fallback_rate > 0:
-            # Rule B: Recent fallback
+            # Rule B: Recent fallback (Phase 24 Rule B)
             run_batch = True
             batch_required_by_rule = True
             adaptive_batch_reason = f"recent_fallback_detected (rate={rolling_fallback_rate})"
@@ -295,6 +306,27 @@ def main() -> None:
             adaptive_batch_reason = "safe_adaptive_skip"
 
         batch_skip_reason = adaptive_batch_reason
+    elif batch_strategy == "periodic_audit":
+        # Rule A: Unstable
+        if not stable_streaming:
+            batch_audit_due = True
+            batch_audit_reason = "unstable_streaming"
+        # Rule B: Recent fallback (Phase 26 Trigger B)
+        elif rolling_fallback_rate > 0:
+            batch_audit_due = True
+            batch_audit_reason = f"recent_fallback_detected (rate={rolling_fallback_rate})"
+        # Rule C: Audit due (freshness)
+        elif runs_since_last_full_batch >= args.batch_audit_every:
+            batch_audit_due = True
+            batch_audit_reason = f"audit_due (runs_since_last: {runs_since_last_full_batch})"
+
+        if batch_audit_due:
+            run_batch = True
+            batch_skip_reason = f"audit_trigger: {batch_audit_reason}"
+        else:
+            run_batch = False
+            batch_skip_reason = "periodic_audit_skip"
+            batch_required_by_rule = False
 
     def is_streaming_validation_eligible(stable: bool, metrics: Dict[str, Any], streaming_success: bool) -> bool:
         """Determines if a run can be classified as streaming_only_validation."""
@@ -318,6 +350,11 @@ def main() -> None:
             f"Batch adaptive decision | executed={str(run_batch).lower()} | "
             f"stable={str(stable_streaming).lower()} | fresh={str(batch_validation_fresh).lower()} | "
             f"reason={adaptive_batch_reason}"
+        )
+    elif batch_strategy == "periodic_audit":
+        logger.info(
+            f"Batch periodic audit decision | executed={str(run_batch).lower()} | due={str(batch_audit_due).lower()} | "
+            f"reason={batch_audit_reason if batch_audit_due else 'audit_not_due'}"
         )
     else:
         logger.info(
@@ -761,8 +798,13 @@ def main() -> None:
             "batch_executed": run_batch,
             "batch_skip_reason": batch_skip_reason,
             "batch_validation_fresh": batch_validation_fresh if batch_strategy == "adaptive" else None,
-            "batch_required_by_rule": batch_required_by_rule if batch_strategy == "adaptive" else None,
+            "batch_required_by_rule": batch_required_by_rule
+            if batch_strategy in ["adaptive", "periodic_audit"]
+            else None,
             "adaptive_batch_reason": adaptive_batch_reason,
+            "batch_audit_due": batch_audit_due,
+            "batch_audit_reason": batch_audit_reason,
+            "periodic_audit_mode_active": periodic_audit_mode_active,
             "validation_mode": validation_mode,
             "promotion_basis": promotion_basis,
             "inferred_promotion_allowed": inferred_promotion_allowed,
