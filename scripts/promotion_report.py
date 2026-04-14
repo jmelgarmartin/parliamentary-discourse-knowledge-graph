@@ -123,6 +123,58 @@ def run_report() -> None:
             f"avg_conf={rolling_10['avg_confidence_score']:.2f}"
         )
 
+    # 6. Batch Retirement Readiness (Phase 25)
+    recent_entry_window = 20
+    recent_entries = entries[-recent_entry_window:]
+    recent_fallbacks = sum(1 for e in recent_entries if e.get("promotion_result") == "FALLBACK")
+    recent_full_batch_count = sum(1 for e in recent_entries if e.get("validation_mode") == "full_batch_validation")
+    recent_streaming_only_count = sum(
+        1 for e in recent_entries if e.get("validation_mode") == "streaming_only_validation"
+    )
+    recent_inferred_promotion_count = sum(1 for e in recent_entries if e.get("promotion_result") == "PROMOTED_INFERRED")
+    recent_adaptive_skip_count = sum(
+        1 for e in recent_entries if e.get("adaptive_batch_reason") == "safe_adaptive_skip"
+    )
+    reactivations = sum(1 for e in recent_entries if e.get("batch_required_by_rule") is True)
+    batch_reactivation_rate = round(reactivations / len(recent_entries), 4) if recent_entries else 0.0
+
+    retirement_rule = (
+        "stable_streaming == True AND recent_fallbacks == 0 AND "
+        "runs_since_last_full_batch < 30 AND recent_adaptive_skip_count > 0"
+    )
+
+    ready_reasons = []
+    if not stable:
+        ready_reasons.append("Streaming pipeline is not yet stable")
+    if recent_fallbacks > 0:
+        ready_reasons.append(f"Detected {recent_fallbacks} fallbacks in the last {recent_entry_window} runs")
+    if runs_since_last_full_batch >= 30:
+        ready_reasons.append(
+            f"Full batch evidence is too stale (runs since last: {runs_since_last_full_batch}, threshold: 30)"
+        )
+    if recent_adaptive_skip_count == 0:
+        ready_reasons.append("Adaptive batch skip has not been exercised successfully in recent runs")
+
+    ready_for_retirement = len(ready_reasons) == 0
+    recommended_mode = "move_batch_to_periodic_audit" if ready_for_retirement else "keep_adaptive_batch"
+
+    retirement_readiness = {
+        "ready_for_batch_retirement": ready_for_retirement,
+        "recommended_next_mode": recommended_mode,
+        "retirement_rule_applied": retirement_rule,
+        "retirement_reason": "Criteria met" if ready_for_retirement else "; ".join(ready_reasons),
+        "metrics": {
+            "recent_window_size": len(recent_entries),
+            "recent_fallbacks": recent_fallbacks,
+            "recent_full_batch_count": recent_full_batch_count,
+            "recent_streaming_only_count": recent_streaming_only_count,
+            "recent_inferred_promotion_count": recent_inferred_promotion_count,
+            "recent_adaptive_skip_count": recent_adaptive_skip_count,
+            "batch_reactivation_rate": batch_reactivation_rate,
+            "runs_since_last_full_batch": runs_since_last_full_batch,
+        },
+    }
+
     report = {
         "overall_counts": {
             "total_runs": total_runs,
@@ -142,6 +194,7 @@ def run_report() -> None:
             "stability_reason": reason,
             "runs_since_last_full_batch": runs_since_last_full_batch,
         },
+        "batch_retirement_readiness": retirement_readiness,
         "recommendation": {
             "ready_for_default_promotion": stable,  # Synced with stability for now
             "rule_applied": rule,
@@ -165,6 +218,10 @@ def run_report() -> None:
         f"inferred_promotions={inferred_promotions}"
     )
     print(f">>> Adaptive batch | runs_since_last_full_batch={runs_since_last_full_batch}")
+    print(
+        f">>> Batch retirement readiness | ready={str(ready_for_retirement).lower()} | "
+        f"mode={recommended_mode} | reason={retirement_readiness['retirement_reason']}"
+    )
 
     if stable:
         print(">>> STATUS: STABLE streaming pipeline.")

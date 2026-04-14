@@ -314,6 +314,29 @@ python src/main.py --batch-strategy adaptive --batch-freshness-window 10
 ### Backward Compatibility
 Explicit flags (`--use-streaming-candidate`, `--promote-streaming`) are retained to support legacy workflows and allow operators to explicitly state their intent, even though candidate evaluation is now the guarded default.
 
+## Batch Retirement Readiness (Phase 25)
+
+Introduced in Phase 25, the Batch Retirement Readiness assessment is an observability layer that determines if the system can safely transition batch processing from a synchronous safety mechanism into a secondary role (such as periodic audit, asynchronous verification, or recovery-only mode).
+
+### Readiness Criteria
+The system assesses retirement readiness based on a deterministic rule applied to the recent history (last 20 runs):
+- **Stability**: `stable_streaming` must be `true` (100% success rate in the window).
+- **Recent Smoothness**: Zero `FALLBACK` events in the recent window.
+- **Baseline Freshness**: The time since the last `full_batch_validation` must be within a safe threshold (currently < 30 runs). This ensures we still have relatively recent ground-truth evidence.
+- **Exercised Adaptive Logic**: The system must have successfully skipped batch at least once in the recent window (`recent_adaptive_skip_count > 0`), proving that the adaptive logic is operational.
+
+### Assessment Outputs
+The `promotion_monitoring_summary.json` includes a `batch_retirement_readiness` section with:
+- **`ready_for_batch_retirement`**: Boolean flag indicating if all criteria are met.
+- **`recommended_next_mode`**:
+    - `move_batch_to_periodic_audit`: All criteria met; batch can be decoupled from the main path.
+    - `keep_adaptive_batch`: One or more criteria failed; batch should remain in its adaptive role.
+- **`retirement_reason`**: Detailed explanation of why the current mode is recommended.
+
+### Safety Guarantees
+- **Assessment-Only**: This phase does **not** modify the runtime behavior of `src/main.py`. It provides decision-support metrics for future phases.
+- **Periodic Evidence**: The freshness threshold ensures that ground-truth validation is never abandoned completely, even in highly stable environments.
+
 ### Command Examples
 
 **1. Standard Guarded Run (Default):**
