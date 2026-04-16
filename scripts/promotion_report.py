@@ -123,7 +123,7 @@ def run_report() -> None:
             f"avg_conf={rolling_10['avg_confidence_score']:.2f}"
         )
 
-    # 6. Recovery-Only Readiness Assessment (Phase 27)
+    # 6. Active Recovery Monitoring (formerly Recovery-Only Readiness)
     recent_entry_window = 20
     recent_entries = entries[-recent_entry_window:]
 
@@ -201,11 +201,9 @@ def run_report() -> None:
         recovery_reasons.append(f"Insufficient history since last mismatch {mismatch_context}, need 50 runs")
 
     ready_for_recovery_only = len(recovery_reasons) == 0
-    recommended_recovery_mode = "move_to_recovery_only" if ready_for_recovery_only else "keep_periodic_audit"
-
     recovery_readiness = {
         "ready": ready_for_recovery_only,
-        "recommended_next_mode": recommended_recovery_mode,
+        "recommended_batch_mode": "recovery_only",
         "rule_applied": recovery_rule,
         "reason": "Criteria met" if ready_for_recovery_only else "; ".join(recovery_reasons),
         "metrics": {
@@ -230,7 +228,7 @@ def run_report() -> None:
         },
     }
 
-    # 7. Batch Retirement Readiness (Phase 25 - kept for compatibility)
+    # 7. Legacy Audit Readiness (DEPRECATED)
     recent_fallbacks = sum(1 for e in recent_entries if e.get("promotion_result") == "FALLBACK")
     recent_full_batch_count = sum(1 for e in recent_entries if e.get("validation_mode") == "full_batch_validation")
     recent_streaming_only_count = sum(
@@ -247,6 +245,11 @@ def run_report() -> None:
     recent_periodic_audit_skip = sum(
         1 for e in recent_entries if e.get("batch_strategy") == "periodic_audit" and e.get("batch_executed") is False
     )
+
+    # Phase 32 metrics: recovery_only
+    recent_recovery_only_runs = [e for e in recent_entries if e.get("batch_strategy") == "recovery_only"]
+    recent_recovery_triggered = sum(1 for e in recent_recovery_only_runs if e.get("recovery_triggered") is True)
+    recent_recovery_skipped = sum(1 for e in recent_recovery_only_runs if e.get("recovery_triggered") is False)
 
     reactivations = sum(1 for e in recent_entries if e.get("batch_required_by_rule") is True)
     batch_reactivation_rate = round(reactivations / len(recent_entries), 4) if recent_entries else 0.0
@@ -285,6 +288,9 @@ def run_report() -> None:
             "recent_adaptive_skip_count": recent_adaptive_skip_count,
             "recent_periodic_audit_count": recent_periodic_audit_count_v26,
             "recent_periodic_audit_skip": recent_periodic_audit_skip,
+            "recent_recovery_only_count": len(recent_recovery_only_runs),
+            "recent_recovery_triggered": recent_recovery_triggered,
+            "recent_recovery_skipped": recent_recovery_skipped,
             "batch_reactivation_rate": batch_reactivation_rate,
             "runs_since_last_full_batch": runs_since_last_full_batch,
             "audit_freshness_status": runs_since_last_full_batch < 10,
@@ -311,10 +317,11 @@ def run_report() -> None:
             "stability_reason": reason,
             "runs_since_last_full_batch": runs_since_last_full_batch,
         },
-        "batch_retirement_readiness": retirement_readiness,
-        "batch_recovery_only_readiness": recovery_readiness,
+        "legacy_audit_readiness": retirement_readiness,
+        "active_recovery_monitoring": recovery_readiness,
         "recommendation": {
-            "ready_for_default_promotion": stable,  # Synced with stability for now
+            "recommended_batch_mode": "recovery_only",
+            "ready_for_default_promotion": stable,
             "rule_applied": rule,
             "reason": reason,
         },

@@ -239,9 +239,12 @@ In Phase 20B, the pipeline moves from shadow monitoring to **Guarded Production*
 ### Batch Sampling Strategy (Phase 22A)
 
 To optimize execution while maintaining safety, the pipeline supports conditional batch execution:
-- `--batch-strategy always`: (Default) Batch runs on every execution.
-- `--batch-strategy sampled`: Runs batch every Nth execution, where N is set by `--batch-sample-every` (default: 5). The rule is `(total_runs + 1) % N == 0`.
-- `--batch-strategy disabled_only_if_stable`: Skips batch only if `stable_streaming` is `True` in `promotion_monitoring_summary.json`.
+- `--batch-strategy always`: Batch runs on every execution.
+- `--batch-strategy recovery_only`: (**RECOMMENDED**) Batch runs only when instability signals or monitoring gaps are detected.
+- `--batch-strategy sampled`: Runs batch every Nth execution (default: 5).
+- `--batch-strategy periodic_audit`: (**DEPRECATED**) Proactive periodic audits. Use `recovery_only` instead.
+- `--batch-strategy adaptive`: Dynamically adjust batch based on freshness and stability.
+- `--batch-strategy disabled_only_if_stable`: Skips batch if `stable_streaming` is `True`.
 
 **Safety Features**:
 - **Authoritative Fallback**: If the monitoring summary is missing or malformed, the system defaults to `run_batch=True`.
@@ -337,56 +340,39 @@ The `promotion_monitoring_summary.json` includes a `batch_retirement_readiness` 
 - **Assessment-Only**: This phase does **not** modify the runtime behavior of `src/main.py`. It provides decision-support metrics for future phases.
 - **Periodic Evidence**: The freshness threshold ensures that ground-truth validation is never abandoned completely, even in highly stable environments.
 
-## Periodic Audit Batch Mode (Phase 26)
+## Periodic Audit Batch Mode (Phase 26) [LEGACY]
 
-Introduced in Phase 26, the Periodic Audit strategy officially transitions batch execution from a synchronous safety mechanism into a background audit role. This mode prioritizes the streaming pipeline for production while ensuring that ground-truth validation is performed periodically or immediately upon detection of issues.
+Periodic Audit (via `--batch-strategy periodic_audit`) transitions batch execution from a synchronous safety mechanism into a background audit role. This mode is now considered **legacy** in favor of the more efficient `recovery_only` mode.
 
 ### Audit Trigger Rules
-The system evaluates the following deterministic rules to decide if a batch audit is required:
-
+The system evaluated the following deterministic rules:
 - **Rule A (Stability Check)**: Batch **must run** if `stable_streaming` is `false`.
-- **Rule B (Degradation Check)**: Batch **must run** if any recent fallback has been detected in the stability window (`rolling_metrics_last_10.fallback_rate > 0`).
-- **Rule C (Freshness Check)**: Batch **must run periodically** to refresh validation evidence. If the number of runs since the last `full_batch_validation` meets or exceeds `--batch-audit-every` (default: 10), an audit is triggered.
-- **Rule D (Ready)**: Batch is **safely skipped** only if streaming is stable, no recent fallbacks are detected, and the audit window has not been reached.
+- **Rule B (Degradation Check)**: Batch **must run** if any recent fallback has been detected (`rolling_metrics_last_10.fallback_rate > 0`).
+- **Rule C (Freshness Check)**: Batch **must run periodically** (default every 10 runs).
+- **Rule D (Ready)**: Batch is **safely skipped** if all above are met.
 
-### Safety & Recovery
-- **Safe Fallback**: If the monitoring summary (`promotion_monitoring_summary.json`) is missing, malformed, or incomplete, the system forces a batch audit for safety.
-- **Audit Decision Metadata**: Every decision is recorded in `validation_run_summary.json` via fields:
-  - `batch_audit_due`: Boolean indicating if an audit was required.
-  - `batch_audit_reason`: Specific rule that triggered the audit.
-  - `periodic_audit_mode_active`: Boolean flag confirming the strategy was in use.
+---
+
+## Recovery-Only Batch Mode (Phase 32+)
+
+Introduced in Phase 32 and validated in Phase 33, **Recovery-Only** is the recommended operational mode for the pipeline. It eliminates proactive proactive audits while maintaining full reactive safety.
+
+### Signal-Based Activation
+In this mode, batch processing is **only** triggered by stability signals:
+- `stable_streaming == False`
+- `fallback_rate > 0` in the last 10 runs
+- Monitoring context is missing, invalid, or malformed.
+
+### Why Batch is Still Required
+Batch processing remains the authoritative system of record and is fundamental for:
+- **Baseline Generation**: Initial ground truth for new legislatures.
+- **Signal-Based Recovery**: Rebuilding the silver layer after a detected failure.
+- **Manual Audits**: On-demand verification.
 
 ### Command Example
 ```bash
-python src/main.py --batch-strategy periodic_audit --batch-audit-every 20
+python src/main.py --batch-strategy recovery_only
 ```
-
-## Recovery-Only Batch Mode Assessment (Phase 27)
-
-Phase 27 introduces an observability layer to evaluate whether the system can safely transition from periodic audits to a **recovery-only** batch mode.
-
-### Difference from Periodic Audit
-- **Periodic Audit**: Batch runs proactively every N runs to maintain a validation baseline.
-- **Recovery-Only**: Batch runs ONLY when a failure is detected or explicit recovery is requested.
-
-### Audit Usefulness Classification
-Every batch audit run is classified into one of three categories:
-- **Corrective Audit**: The audit detected a `MISMATCH` or triggered a `FALLBACK`. This proves the audit was necessary for system correctness.
-- **Confirmatory Audit**: The audit confirmed a `MATCH` and allowed `PROMOTED` status. This proves the streaming pipeline was correct but the audit added confidence.
-- **Redundant Audit**: The audit ran but provided no impact on the outcome or confidence baseline.
-
-### Recovery-Only Readiness Criteria
-The system is considered ready for recovery-only mode if it meets these deterministic criteria:
-- **Streaming Stability**: `stable_streaming == True`.
-- **Zero Recent Mismatches**: No parity mismatches in the last 20-run audit window.
-- **Perfect Audit Track Record**: `recent_audit_full_match_rate == 100%`.
-- **Historical Depth**: At least **50 runs** since the last detected mismatch (or never matched in history).
-
-### Why Batch is Still Required
-Even in recovery-only mode, batch processing remains a fundamental dependency for:
-- **Baseline Generation**: Initial ground truth for new legislatures.
-- **Fail-Safe Recovery**: Rebuilding the silver layer after a catastrophic streaming failure.
-- **Manual Audits**: On-demand verification of suspect data.
 
 ### Command Examples
 

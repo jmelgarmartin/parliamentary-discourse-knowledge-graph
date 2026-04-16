@@ -14,7 +14,8 @@ import os
 import pathlib
 import re
 import time
-from typing import Any, Callable, Dict, List, Optional
+import urllib.parse
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import duckdb
 import pandas as pd
@@ -74,18 +75,18 @@ class SessionsScraper:
 
     def _init_db(self) -> None:
         """Initializes DuckDB connection and ensures the state table exists."""
-        db_path = os.path.abspath(self.state_path)
+        db_path = str(pathlib.Path(self.state_path).resolve().as_posix())
         os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
 
         try:
             self.db_conn = duckdb.connect(db_path)
         except (UnicodeDecodeError, Exception) as e:
-            logger.warning(f"Failed to connect to DuckDB using absolute path: {e}. Trying relative path...")
+            logger.warning(f"Failed to connect to DuckDB using posix path: {e}. Trying raw path...")
             try:
-                # Try relative path as fallback
+                # Try raw string
                 self.db_conn = duckdb.connect(self.state_path)
             except Exception as e2:
-                logger.error(f"Failed to connect to DuckDB using relative path: {e2}. State tracking will be disabled.")
+                logger.error(f"Failed to connect to DuckDB: {e2}. State tracking will be disabled.")
                 raise e2
 
         self.db_conn.execute(
@@ -242,6 +243,79 @@ class SessionsScraper:
             [self.dataset, self.term, document_id, document_url, checksum, raw_path, now_utc, status, error_message],
         )
 
+    def _build_canonical_publication_url(self, raw_url: str) -> str:
+        """
+        Canonicalizes the publication URL to ensure it includes mandatory parameters
+        like .CODI. suffix and legislature identifier.
+        """
+        parsed = urllib.parse.urlparse(raw_url)
+        params = urllib.parse.parse_qs(parsed.query)
+
+        # 1. Handle _publicaciones_id_texto (ensure .CODI. suffix for plenaries)
+        if "_publicaciones_id_texto" in params:
+            id_texto = params["_publicaciones_id_texto"][0]
+            if id_texto.startswith("DSCD-") and ".CODI." not in id_texto:
+                logger.info(f"Appending .CODI. suffix to document ID: {id_texto}")
+                params["_publicaciones_id_texto"] = [f"{id_texto}.CODI."]
+
+        # 2. Handle _publicaciones_legislatura
+        # Mapping for recent legislatures (Spanish Congress uses Roman numerals in URLs)
+        roman_map = {
+            "15": "XV",
+            "14": "XIV",
+            "13": "XIII",
+            "12": "XII",
+            "11": "XI",
+            "10": "X",
+            "9": "IX",
+            "8": "VIII",
+            "7": "VII",
+            "6": "VI",
+            "5": "V",
+            "4": "IV",
+            "3": "III",
+            "2": "II",
+            "1": "I",
+        }
+        target_leg = roman_map.get(self.term, self.term)
+
+        if "_publicaciones_legislatura" not in params or params["_publicaciones_legislatura"][0] != target_leg:
+            logger.info(f"Setting/Correcting legislature parameter to {target_leg}")
+            params["_publicaciones_legislatura"] = [target_leg]
+
+        # Reconstruct URL
+        new_query = urllib.parse.urlencode(params, doseq=True)
+        canonical_url = urllib.parse.urlunparse(parsed._replace(query=new_query))
+
+        if canonical_url != raw_url:
+            logger.info(f"Canonicalized URL: {canonical_url}")
+
+        return canonical_url
+
+    def _is_valid_plenary_html(self, html_content: str) -> Tuple[bool, str]:
+        """
+        Validates if the fetched HTML content is a valid plenary session document.
+        Detects skeletal placeholder responses.
+        """
+        if not html_content:
+            return False, "Empty content"
+
+        # Detect the specific "de" placeholder found in Phase 29B
+        # Usually it's <section id="portlet_publicaciones">de</section>
+        if ">de</section>" in html_content or ">de</SECTION>" in html_content:
+            return False, "Detected 'de' placeholder (incomplete page)"
+
+        # Check for minimum content length (Diario sessions are usually > 50KB)
+        # Skeletal pages are typically < 20KB
+        if len(html_content) < 30000:
+            return False, f"Content suspiciously short ({len(html_content)} bytes)"
+
+        # Check for mandatory session marker
+        if "DIARIO DE SESIONES" not in html_content.upper():
+            return False, "Missing 'DIARIO DE SESIONES' header"
+
+        return True, "Valid content"
+
     def _save_pleno_content(self, document_id: str, html_content: str) -> str:
         """
         Persists the pleno content (HTML) to the filesystem.
@@ -269,20 +343,30 @@ class SessionsScraper:
         if not self.driver or not self.wait:
             return None
 
+        # Canonicalize the URL before fetching
+        canonical_url = self._build_canonical_publication_url(document_url)
+
         # Process in new tab to preserve search results state
-        self.driver.execute_script("window.open(arguments[0]);", document_url)
+        self.driver.execute_script("window.open(arguments[0]);", canonical_url)
         self.driver.switch_to.window(self.driver.window_handles[-1])
 
         html_content = None
         try:
-            # Added a slight delay for Akamai / anti-bot protection when opening new tabs directly
+            # Added a delay for Akamai / anti-bot protection when opening new tabs directly
             time.sleep(3)
             self.wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+
             # Find the portlet block
             portlet = self.driver.find_element(By.CSS_SELECTOR, "section#portlet_publicaciones")
             html_content = portlet.get_attribute("outerHTML")
+
+            # Validate fetched content
+            is_valid, reason = self._is_valid_plenary_html(html_content)
+            if not is_valid:
+                logger.error(f"Invalid content fetched from {canonical_url}: {reason}")
+                html_content = None
         except Exception as e:
-            logger.error(f"Error extracting HTML from {document_url}: {e}")
+            logger.error(f"Error extracting HTML from {canonical_url}: {e}")
         finally:
             self.driver.close()
             # Restore main window focus

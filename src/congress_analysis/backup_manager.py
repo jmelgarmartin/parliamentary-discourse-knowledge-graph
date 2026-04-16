@@ -25,7 +25,7 @@ class BackupManager:
         """
         Creates a full backup and returns the backup directory path.
         """
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
         backup_path = self.backup_root / timestamp
 
         try:

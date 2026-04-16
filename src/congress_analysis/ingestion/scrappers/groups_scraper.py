@@ -63,18 +63,18 @@ class GroupsScraper:
 
     def _init_db(self) -> None:
         """Initializes DuckDB connection and ensures the state table exists."""
-        db_path = os.path.abspath(self.state_path)
+        db_path = str(pathlib.Path(self.state_path).resolve().as_posix())
         os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
 
         try:
             self.db_conn = duckdb.connect(db_path)
         except (UnicodeDecodeError, Exception) as e:
-            logger.warning(f"Failed to connect to DuckDB using absolute path: {e}. Trying relative path...")
+            logger.warning(f"Failed to connect to DuckDB using posix path: {e}. Trying raw path...")
             try:
-                # Try relative path as fallback
+                # Try raw string
                 self.db_conn = duckdb.connect(self.state_path)
             except Exception as e2:
-                logger.error(f"Failed to connect to DuckDB using relative path: {e2}. State tracking will be disabled.")
+                logger.error(f"Failed to connect to DuckDB: {e2}. State tracking will be disabled.")
                 raise e2
 
         self.db_conn.execute(

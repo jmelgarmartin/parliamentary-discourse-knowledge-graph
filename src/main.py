@@ -3,6 +3,7 @@ Main execution pipeline for the Parliamentary Discourse Knowledge Graph project.
 """
 
 import argparse
+import json
 import logging
 import os
 import pathlib
@@ -23,6 +24,8 @@ from congress_analysis.ingestion.scrappers.sessions_scraper import SessionsScrap
 from congress_analysis.ingestion.transformers.substitutions_enricher import SubstitutionsEnricher  # noqa: E402
 from congress_analysis.silver.enrich_legislature import run_enrichment as run_interventions_enrichment  # noqa: E402
 from congress_analysis.silver.interventions_extractor import InterventionsExtractor  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 
 def setup_logging(process_name: str, log_level: str = "INFO") -> None:
@@ -104,9 +107,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--batch-strategy",
-        choices=["always", "sampled", "disabled_only_if_stable", "adaptive", "periodic_audit"],
+        choices=["always", "sampled", "disabled_only_if_stable", "adaptive", "periodic_audit", "recovery_only"],
         default="always",
-        help="Strategy for batch execution (always, sampled, disabled_only_if_stable, adaptive, or periodic_audit).",
+        help=(
+            "Strategy for batch execution. Choices: always, sampled, disabled_only_if_stable, adaptive, "
+            "periodic_audit (DEPRECATED), or recovery_only (RECOMMENDED)."
+        ),
     )
     parser.add_argument(
         "--batch-freshness-window",
@@ -124,7 +130,7 @@ def main() -> None:
         "--batch-audit-every",
         type=int,
         default=10,
-        help="Run batch every Nth execution when strategy is 'periodic_audit' (default: 10).",
+        help="[LEGACY] Run batch every Nth execution when strategy is 'periodic_audit' (default: 10).",
     )
 
     args = parser.parse_args()
@@ -227,8 +233,6 @@ def main() -> None:
     summary_path = pathlib.Path("data/validation/promotion_monitoring_summary.json")
     if summary_path.exists():
         try:
-            import json
-
             with open(summary_path, "r", encoding="utf-8") as f:
                 content = f.read()
                 if content and isinstance(content, str) and content.strip().startswith("{"):
@@ -252,15 +256,52 @@ def main() -> None:
         except Exception as e:
             logger.warning(f"Malformed or invalid stability summary: {e}")
 
+    # --- Phase 32: Recovery-Only Mode Activation ---
+    recovery_mode_active = batch_strategy == "recovery_only"
+    recovery_triggered = False
+    recovery_trigger_reason = None
+
     # Decision Logic
     if not summary_valid and batch_strategy != "always":
         run_batch = True
         batch_skip_reason = "missing_or_invalid_summary_fallback"
         batch_audit_due = True
         batch_audit_reason = "missing_or_invalid_monitoring_context"
+
+        if recovery_mode_active:
+            recovery_triggered = True
+            recovery_trigger_reason = "missing_or_invalid_monitoring_context"
+            logger.warning(f"Recovery triggered: {recovery_trigger_reason}")
+
     elif batch_strategy == "always":
         run_batch = True
         batch_skip_reason = "always_run"
+    elif batch_strategy == "recovery_only":
+        logger.info("Batch strategy: recovery_only | Signal-based activation.")
+        run_batch = False  # Default to false in recovery-only
+
+        # Check stability signals
+        stability_metrics = summary_data.get("stability_metrics", {})
+        stable_streaming = stability_metrics.get("stable_streaming", False)
+
+        # Check fallback rate in last 10
+        rolling_10 = stability_metrics.get("rolling_metrics_last_10", {})
+        fallback_rate_10 = rolling_10.get("fallback_rate", 0)
+
+        if not stable_streaming:
+            run_batch = True
+            recovery_triggered = True
+            recovery_trigger_reason = "detected_instability"
+            logger.warning(f"Recovery triggered: {recovery_trigger_reason} (stable_streaming=False)")
+        elif fallback_rate_10 > 0:
+            run_batch = True
+            recovery_triggered = True
+            recovery_trigger_reason = "fallback_rate_exceeded"
+            logger.warning(f"Recovery triggered: {recovery_trigger_reason} (fallback_rate={fallback_rate_10})")
+        else:
+            batch_skip_reason = "stable_streaming"
+            logger.info("Recovery-only baseline met: stable_streaming=True, fallback_rate=0. Skipping batch.")
+
     elif batch_strategy == "disabled_only_if_stable":
         if stable_streaming:
             run_batch = False
@@ -307,6 +348,9 @@ def main() -> None:
 
         batch_skip_reason = adaptive_batch_reason
     elif batch_strategy == "periodic_audit":
+        logger.warning(
+            "periodic_audit is deprecated and no longer recommended for normal operation. Use recovery_only instead."
+        )
         # Rule A: Unstable
         if not stable_streaming:
             batch_audit_due = True
@@ -413,16 +457,60 @@ def main() -> None:
         logger.info("Experimental streaming enabled. Wiring callback for in-memory extraction.")
         extractor_stream = InterventionsExtractor(args.term)
 
+        # Robust Diagnostic Instrumentation (Phase 29)
+        diagnosis_file_l = pathlib.Path("data/validation/streaming_empty_records_diagnosis.jsonl")
+        diagnosis_file_l.parent.mkdir(parents=True, exist_ok=True)
+
+        callback_seen_ids = set()
+
         def extraction_callback(doc_id: str, html_content: str) -> None:
             """Callback to trigger extraction immediately after HTML is obtained."""
+            import hashlib
+            import time
+
+            start_t = time.time()
+            timestamp = datetime.now().isoformat()
+            html_len = len(html_content) if html_content else 0
+            html_sha = hashlib.sha256(html_content.encode("utf-8")).hexdigest() if html_content else None
+            count_before = len(streaming_records)
+            doc_name = f"{doc_id}.html"
+            exception_detected = False
+            exception_msg = None
+
+            records = []
             try:
-                # Deduce doc_name as expected by the extractor
-                doc_name = f"{doc_id}.html"
+                callback_seen_ids.add(doc_id)
                 records = extractor_stream.extract_from_content(html_content, doc_id, doc_name)
                 streaming_records.extend(records)
                 logger.debug(f"Stream-extracted {len(records)} interventions from {doc_id}")
             except Exception as e:
+                exception_detected = True
+                exception_msg = str(e)
                 logger.error(f"Error in experimental streaming callback for {doc_id}: {e}")
+
+            count_after = len(streaming_records)
+            exec_time_ms = int((time.time() - start_t) * 1000)
+
+            # Robust Persistence (JSONL)
+            diag_record = {
+                "timestamp": timestamp,
+                "callback_invoked": True,
+                "doc_id": doc_id,
+                "doc_name": doc_name,
+                "html_length": html_len,
+                "html_sha256": html_sha,
+                "streaming_records_count_before": count_before,
+                "streaming_records_count_after": count_after,
+                "extracted_record_count": len(records),
+                "execution_time_ms": exec_time_ms,
+                "exception_detected": exception_detected,
+                "exception_message": exception_msg,
+            }
+            try:
+                with open(diagnosis_file_l, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(diag_record) + "\n")
+            except Exception as de:
+                logger.warning(f"Failed to persist diagnostic record for {doc_id}: {de}")
 
         content_callback = extraction_callback
 
@@ -566,8 +654,6 @@ def main() -> None:
 
     # --- PHASE 7: Experimental Streaming Validation ---
     if experimental_streaming or default_streaming_active:
-        import json
-
         val_dir = pathlib.Path(f"data/validation/legislature={args.term}")
         val_dir.mkdir(parents=True, exist_ok=True)
         streaming_candidate_path = val_dir / "interventions_streaming_candidate.parquet"
@@ -801,10 +887,12 @@ def main() -> None:
             "batch_required_by_rule": batch_required_by_rule
             if batch_strategy in ["adaptive", "periodic_audit"]
             else None,
-            "adaptive_batch_reason": adaptive_batch_reason,
             "batch_audit_due": batch_audit_due,
             "batch_audit_reason": batch_audit_reason,
             "periodic_audit_mode_active": periodic_audit_mode_active,
+            "recovery_mode_active": recovery_mode_active,
+            "recovery_triggered": recovery_triggered,
+            "recovery_trigger_reason": recovery_trigger_reason,
             "validation_mode": validation_mode,
             "promotion_basis": promotion_basis,
             "inferred_promotion_allowed": inferred_promotion_allowed,
@@ -823,6 +911,67 @@ def main() -> None:
                 f.write(json.dumps(summary) + "\n")
         except Exception as e:
             logger.warning(f"Failed to append validation run history: {e}")
+
+        # --- Phase 29: Finalize Streaming Diagnosis ---
+        if experimental_streaming:
+            try:
+                final_diag_path = pathlib.Path("data/validation/streaming_empty_records_diagnosis.json")
+                diag_records = []
+                if diagnosis_file_l.exists():
+                    with open(diagnosis_file_l, "r", encoding="utf-8") as f:
+                        for line in f:
+                            if line.strip():
+                                diag_records.append(json.loads(line))
+
+                # Identify callback_not_invoked
+                final_docs = []
+                seen_in_callback = {r["doc_id"] for r in diag_records}
+
+                # We consider new_files as expected
+                for p in new_files or []:
+                    did = p.stem
+                    if did not in seen_in_callback:
+                        final_docs.append(
+                            {
+                                "timestamp": datetime.now().isoformat(),
+                                "callback_invoked": False,
+                                "callback_expected": True,
+                                "doc_id": did,
+                                "diagnosis_label": "callback_not_invoked",
+                                "diagnosis_reason": "Document in new_files but callback never fired",
+                                "diagnosis_confidence": "high",
+                            }
+                        )
+
+                for r in diag_records:
+                    label = "unknown"
+                    reason = "No clear pattern"
+                    confidence = "low"
+
+                    if r["exception_detected"]:
+                        label = "swallowed_exception"
+                        reason = f"Exception in callback: {r['exception_message']}"
+                        confidence = "high"
+                    elif r["html_length"] < 500:  # Heuristic for too small
+                        label = "empty_html_content"
+                        reason = f"HTML length ({r['html_length']}) is suspiciously small"
+                        confidence = "medium"
+                    elif r["extracted_record_count"] == 0:
+                        label = "extractor_returned_empty"
+                        reason = "Extractor returned 0 records despite having HTML content"
+                        confidence = "medium"
+
+                    r["diagnosis_label"] = label
+                    r["diagnosis_reason"] = reason
+                    r["diagnosis_confidence"] = confidence
+                    r["callback_expected"] = True
+                    final_docs.append(r)
+
+                with open(final_diag_path, "w", encoding="utf-8") as f:
+                    json.dump({"run_diagnosis": final_docs, "timestamp": datetime.now().isoformat()}, f, indent=4)
+                logger.info(f"Streaming diagnosis artifact generated: {final_diag_path}")
+            except Exception as de:
+                logger.warning(f"Failed to finalize streaming diagnosis: {de}")
     else:
         logger.info("Using official batch source | policy=batch_only")
 
